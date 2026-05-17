@@ -1,0 +1,52 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $AutowireWindow : Adw.ApplicationWindow {
+  title: _("Autowire");
+  default-width: 480;
+  default-height: 660;
+
+  content: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      [end]
+      Button add_button {
+        icon-name: "list-add-symbolic";
+        tooltip-text: _("Add Profile");
+        styles ["suggested-action"]
+      }
+    }
+
+    content: Stack main_stack {
+      transition-type: crossfade;
+      transition-duration: 200;
+
+      StackPage {
+        name: "empty";
+        child: Adw.StatusPage {
+          icon-name: "audio-speakers-symbolic";
+          title: _("No Audio Profiles");
+          description: _("Add a profile to automatically route\naudio when a device connects.");
+
+          child: Button empty_add_button {
+            label: _("Add Profile");
+            halign: center;
+            styles ["suggested-action", "pill"]
+          };
+        };
+      }
+
+      StackPage {
+        name: "profiles";
+        child: ScrolledWindow {
+          vexpand: true;
+          hscrollbar-policy: never;
+
+          child: Adw.PreferencesPage profiles_page {
+            vexpand: true;
+          };
+        };
+      }
+    };
+  };
+}

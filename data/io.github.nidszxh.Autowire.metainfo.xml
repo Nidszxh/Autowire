@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nidszxh.Autowire</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Autowire</name>
+  <summary>Automatically route audio when devices connect</summary>
+
+  <description>
+    <p>
+      Autowire is a lightweight, set-and-forget audio profile manager for GNOME.
+      Define a profile once — link a hardware device (USB dock, Bluetooth headset,
+      HDMI monitor) to a set of default audio inputs and outputs — and Autowire
+      silently applies it every time that device connects.
+    </p>
+    <p>
+      No more manually switching four dropdowns in Settings every time you move
+      between your desk and your laptop. Autowire runs as a background service and
+      reacts to PipeWire/WirePlumber hardware events instantly, before you even
+      play a sound.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Create named Audio Profiles linked to any USB, Bluetooth, or HDMI device</li>
+      <li>Automatically switch default output (speakers, headphones) and input (microphone)</li>
+      <li>Event-driven daemon — near-zero resource usage at idle</li>
+      <li>Clean Libadwaita interface that matches GNOME Settings</li>
+      <li>Profiles stored locally in a simple JSON file</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.nidszxh.Autowire.desktop</launchable>
+
+  <url type="homepage">https://github.com/nidszxh/autowire</url>
+  <url type="bugtracker">https://github.com/nidszxh/autowire/issues</url>
+  <url type="vcs-browser">https://github.com/nidszxh/autowire</url>
+
+  <developer id="io.github.nidszxh">
+    <name>nidszxh</name>
+  </developer>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#1AADA8</color>
+    <color type="primary" scheme_preference="dark">#1A5276</color>
+  </branding>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The main profile list showing configured audio profiles</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Creating a new profile with live device selection</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/new-profile.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2026-05-17">
+      <description>
+        <p>Initial release of Autowire.</p>
+        <ul>
+          <li>Audio Profile creation, editing, and deletion</li>
+          <li>Automatic routing via WirePlumber background daemon</li>
+          <li>systemd user service for automatic startup at login</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+
+  <recommends>
+    <display_length compare="ge">360</display_length>
+  </recommends>
+</component>

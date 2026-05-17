@@ -1,0 +1,18 @@
+[Unit]
+Description=Autowire Audio Routing Daemon
+Documentation=https://github.com/nidszxh/autowire
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/app/bin/autowire-daemon
+Restart=on-failure
+RestartSec=5s
+# Let journald capture structured logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=autowire-daemon
+
+[Install]
+WantedBy=default.target

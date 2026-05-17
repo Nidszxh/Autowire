@@ -1,0 +1,35 @@
+#!/usr/bin/env @PYTHON@
+
+import os
+import sys
+
+_launch_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Dev mode detection: check if _build/data/gresource exists
+_dev_gresource = os.path.join(_launch_dir, '..', '..', '_build', 'data', 'autowire.gresource')
+if os.path.exists(_dev_gresource):
+    _pkgdatadir = os.path.join(_launch_dir, '..', '..', '_build', 'data')
+    # Dev mode: add project root so 'src' package is found (src/ contains __init__.py)
+    _dev_root = os.path.join(_launch_dir, '..', '..')
+    if os.path.exists(os.path.join(_dev_root, 'src', '__init__.py')):
+        sys.path.insert(0, _dev_root)
+else:
+    _pkgdatadir = '@PKGDATADIR@'
+
+sys.path.insert(1, _pkgdatadir)
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+gi.require_version('Wp', '0.5')
+
+from gi.repository import Wp
+Wp.init(Wp.InitFlags.ALL)
+
+# Import from 'src' package (dev mode) or 'autowire' (installed)
+try:
+    from src.main import main
+except ModuleNotFoundError:
+    from autowire.main import main
+
+sys.exit(main('@VERSION@', pkgdatadir=_pkgdatadir))

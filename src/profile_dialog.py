@@ -1,0 +1,119 @@
+"""ProfileDialog — create or edit an audio profile."""
+
+from __future__ import annotations
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+
+from gi.repository import Adw, GObject, Gtk
+
+from . import config_mgr
+from .wp_monitor import get_audio_nodes_sync
+
+RESOURCE_PATH = '/io/github/nidszxh/Autowire/profile_dialog.ui'
+
+_INVALID = Gtk.INVALID_LIST_POSITION
+
+
+@Gtk.Template(resource_path=RESOURCE_PATH)
+class ProfileDialog(Adw.Dialog):
+    __gtype_name__ = 'ProfileDialog'
+
+    __gsignals__ = {
+        'profile-saved': (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
+
+    # Widgets from Blueprint template
+    name_entry: Adw.EntryRow = Gtk.Template.Child()
+    trigger_row: Adw.ComboRow = Gtk.Template.Child()
+    sink_row: Adw.ComboRow = Gtk.Template.Child()
+    source_row: Adw.ComboRow = Gtk.Template.Child()
+    save_button: Gtk.Button = Gtk.Template.Child()
+    cancel_button: Gtk.Button = Gtk.Template.Child()
+
+    def __init__(self, profile: dict | None = None) -> None:
+        super().__init__()
+
+        self._profile = profile        # existing profile being edited, or None for new
+        self._all_nodes: list[dict] = []
+        self._sink_nodes: list[dict] = []
+        self._source_nodes: list[dict] = []
+
+        if profile:
+            self.set_title('Edit Profile')
+
+        self._populate_device_lists()
+        self._connect_signals()
+
+        if profile:
+            self._prefill(profile)
+
+    # ── setup ─────────────────────────────────────────────────────────────
+
+    def _populate_device_lists(self) -> None:
+        """Query live WirePlumber nodes and fill the ComboRow models."""
+        nodes = get_audio_nodes_sync()
+        self._all_nodes = nodes
+        self._sink_nodes = [n for n in nodes if 'Sink' in n.get('media_class', '')]
+        self._source_nodes = [n for n in nodes if 'Source' in n.get('media_class', '')]
+
+        def _labels(node_list: list[dict]) -> list[str]:
+            return [n.get('description') or n.get('name', '') for n in node_list]
+
+        self.trigger_row.set_model(Gtk.StringList.new(_labels(nodes)))
+        self.sink_row.set_model(Gtk.StringList.new(_labels(self._sink_nodes)))
+        self.source_row.set_model(Gtk.StringList.new(_labels(self._source_nodes)))
+
+    def _connect_signals(self) -> None:
+        self.save_button.connect('clicked', self._on_save)
+        self.cancel_button.connect('clicked', lambda _: self.close())
+        self.name_entry.connect('changed', self._validate)
+        self.trigger_row.connect('notify::selected', self._validate)
+        self._validate()
+
+    def _prefill(self, profile: dict) -> None:
+        """Pre-select values when editing an existing profile."""
+        self.name_entry.set_text(profile.get('profile_name', ''))
+
+        trigger = profile.get('trigger_device_name', '')
+        actions = profile.get('actions', {})
+
+        self._select_by_name(self.trigger_row, self._all_nodes, trigger)
+        self._select_by_name(self.sink_row, self._sink_nodes, actions.get('default_sink', ''))
+        self._select_by_name(self.source_row, self._source_nodes, actions.get('default_source', ''))
+
+    @staticmethod
+    def _select_by_name(combo: Adw.ComboRow, node_list: list[dict], name: str) -> None:
+        for i, node in enumerate(node_list):
+            if node.get('name') == name:
+                combo.set_selected(i)
+                return
+
+    # ── validation ────────────────────────────────────────────────────────
+
+    def _validate(self, *_args) -> None:
+        ok = (
+            bool(self.name_entry.get_text().strip())
+            and self.trigger_row.get_selected() != _INVALID
+        )
+        self.save_button.set_sensitive(ok)
+
+    # ── save ──────────────────────────────────────────────────────────────
+
+    def _on_save(self, _btn: Gtk.Button) -> None:
+        name = self.name_entry.get_text().strip()
+        trigger_idx = self.trigger_row.get_selected()
+        sink_idx = self.sink_row.get_selected()
+        source_idx = self.source_row.get_selected()
+
+        if not name or trigger_idx == _INVALID:
+            return
+
+        trigger_node = self._all_nodes[trigger_idx]['name']
+        sink_node = self._sink_nodes[sink_idx]['name'] if sink_idx != _INVALID else ''
+        source_node = self._source_nodes[source_idx]['name'] if source_idx != _INVALID else ''
+
+        config_mgr.save_profile(name, trigger_node, sink_node, source_node)
+        self.emit('profile-saved')
+        self.close()
