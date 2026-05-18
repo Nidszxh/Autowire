@@ -59,3 +59,9 @@ install_data(
   'io.github.nidszxh.Autowire.Daemon.service',
   install_dir: datadir / 'systemd' / 'user',
 )
+
+# ── D-Bus session service (autostart daemon) ────────────────────────────────
+install_data(
+  'io.github.nidszxh.Autowire.service',
+  install_dir: datadir / 'dbus-1' / 'session-services',
+)

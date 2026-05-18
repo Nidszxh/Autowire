@@ -6,7 +6,7 @@ Wants=pipewire.service wireplumber.service
 
 [Service]
 Type=simple
-ExecStart=/app/bin/autowire-daemon
+ExecStart=autowire-daemon
 Restart=on-failure
 RestartSec=5s
 # Let journald capture structured logs

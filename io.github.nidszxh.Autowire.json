@@ -3,15 +3,18 @@
   "runtime": "org.gnome.Platform",
   "runtime-version": "48",
   "sdk": "org.gnome.Sdk",
-  "command": "autowire",
+  "commands": [
+    {"name": "autowire", "exec": "autowire", "passthrough": true},
+    {"name": "autowire-daemon", "exec": "autowire-daemon"}
+  ],
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
     "--socket=fallback-x11",
-    "--socket=session-bus",
-    "--filesystem=xdg-run/pipewire-0",
+    "--socket=pipewire-0",
     "--talk-name=org.freedesktop.WirePlumber",
     "--talk-name=org.freedesktop.portal.Desktop",
+    "--filesystem=/usr/bin/wpctl:ro",
     "--system-talk-name=org.freedesktop.login1"
   ],
   "cleanup": [
@@ -46,6 +49,14 @@
         {
           "type": "dir",
           "path": "."
+        },
+        {
+          "type": "file",
+          "path": "data/io.github.nidszxh.Autowire.Daemon.service"
+        },
+        {
+          "type": "file",
+          "path": "data/io.github.nidszxh.Autowire.service"
         }
       ]
     }

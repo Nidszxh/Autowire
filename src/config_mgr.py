@@ -46,8 +46,14 @@ def save_profile(
     trigger_device: str,
     default_sink: str,
     default_source: str,
+    bt_profile: str = '',
 ) -> None:
-    """Inserts or updates a profile rule, then persists atomically."""
+    """Inserts or updates a profile rule, then persists atomically.
+
+    *bt_profile* is the Bluetooth profile name (e.g. ``a2dp-sink-aac``)
+    to switch to when the trigger device connects.  An empty string means
+    "don't touch the BT profile".
+    """
     profiles = load_profiles()
 
     for p in profiles:
@@ -55,6 +61,7 @@ def save_profile(
             p['profile_name'] = profile_name
             p['actions']['default_sink'] = default_sink
             p['actions']['default_source'] = default_source
+            p['actions']['bt_profile'] = bt_profile
             break
     else:
         profiles.append({
@@ -63,6 +70,7 @@ def save_profile(
             'actions': {
                 'default_sink': default_sink,
                 'default_source': default_source,
+                'bt_profile': bt_profile,
             },
         })
 
