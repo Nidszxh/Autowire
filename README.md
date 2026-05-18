@@ -4,8 +4,6 @@
 
 Autowire automatically switches your PipeWire/WirePlumber audio routing whenever your hardware environment changes. Define a profile once — link a USB dock, Bluetooth headset, or HDMI monitor to a set of default inputs and outputs — and Autowire silently applies it every time that device connects.
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-
 ---
 
 ## Features
@@ -15,6 +13,7 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 - Event-driven background daemon — near-zero resource usage at idle
 - Clean Libadwaita UI that matches GNOME Settings
 - Runs as a `systemd --user` service — works even when the UI is closed
+- Force high-quality Bluetooth codecs (AAC, LDAC, aptX) instead of mSBC
 
 ---
 
@@ -31,41 +30,46 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 
 ---
 
-## Quick Local Run (without Flatpak)
+## Quick Local Run
 
 ```bash
 # Install system dependencies (Fedora)
 sudo dnf install python3-gobject gtk4 libadwaita wireplumber blueprint-compiler
 
-# Run the UI directly
-python3 -c "
-import sys, gi
-sys.path.insert(0, 'src')
-gi.require_version('Gtk', '4.0')
-gi.require_version('Adw', '1')
-gi.require_version('Wp', '0.5')
-from gi.repository import Wp
-Wp.init(Wp.InitFlags.ALL)
-from src.main import main
-sys.exit(main('dev'))
-"
-```
-
-> **Note:** The UI requires the GResource bundle (`autowire.gresource`) to be compiled first by Meson. Without it, Blueprint templates won't load. For full local development, use the Meson build below.
-
----
-
-## Meson Build (Local)
-
-```bash
+# Build (required — Blueprint templates won't load without this)
 meson setup _build --prefix=/usr/local -Dprofile=development
 ninja -C _build
-sudo ninja -C _build install
+
+# Run the UI
+./_build/src/autowire
 ```
+
+> **Important:** Always run `ninja -C _build` before launching. The `@Gtk.Template` decorators load UI from `autowire.gresource`, which must be compiled by Meson.
 
 ---
 
-## Flatpak Build
+## Development
+
+```bash
+# First-time setup
+meson setup _build --prefix=/usr/local -Dprofile=development
+ninja -C _build
+
+# Wipe and rebuild
+rm -rf _build && meson setup _build --prefix=/usr/local -Dprofile=development && ninja -C _build
+
+# Install system-wide (also enables the daemon via postinstall.py)
+sudo ninja -C _build install
+
+# Run tests
+python3 -m pytest tests/ -v
+```
+
+**Dev profile** (`-Dprofile=development`) appends `.Devel` to the app ID (`io.github.nidszxh.Autowire.Devel`) so it can coexist with a release install.
+
+---
+
+## Flatpak
 
 ```bash
 # Install flatpak-builder
@@ -76,13 +80,43 @@ flatpak-builder --force-clean --user --install _flatpak_build \
     io.github.nidszxh.Autowire.json
 ```
 
+The Flatpak manifest declares two commands:
+- `autowire` — the GTK UI
+- `autowire-daemon` — the headless background service (auto-started via D-Bus session service on login)
+
 ---
 
-## Run Tests
+## How It Works
 
-```bash
-python3 -m pytest tests/ -v
+### The Double-Headed Architecture
+
 ```
+┌─────────────────────────────────────────────────────┐
+│  Autowire UI (GTK4 / Adwaita)                       │
+│  • Create/edit/delete audio profiles                │
+│  • Select trigger device + actions                  │
+│  • Writes to profiles.json on save                  │
+└──────────────┬──────────────────────────────────────┘
+               │ profiles.json
+               ▼
+┌─────────────────────────────────────────────────────┐
+│  Autowire Daemon (GLib-only, no GTK)                │
+│  • Listens to WirePlumber node/device events       │
+│  • Matches new nodes against profiles.json          │
+│  • Runs wpctl set-default / wpctl set-profile       │
+└─────────────────────────────────────────────────────┘
+```
+
+### Profile Matching Flow
+
+1. A device connects (USB dock, Bluetooth headset, HDMI monitor)
+2. WirePlumber creates a `WpNode` for the new audio endpoint
+3. The Daemon's `WpMonitor` catches the `node-added` signal
+4. `check_and_route_device()` looks up `profiles.json`
+5. If a profile matches the trigger device, it fires:
+   - `wpctl set-default <sink>` — routes audio to the chosen output
+   - `wpctl set-default <source>` — routes microphone to the chosen input
+   - `wpctl set-profile <device_id> <bt_codec>` — forces high-quality BT codec (optional)
 
 ---
 
@@ -90,48 +124,49 @@ python3 -m pytest tests/ -v
 
 ```
 autowire/
-├── build-aux/meson/postinstall.py   # Post-install icon/desktop cache update
+├── build-aux/meson/
+│   └── postinstall.py          # Post-install: icon cache, db, systemd enable
 ├── data/
 │   ├── ui/
-│   │   ├── window.blp               # Main window Blueprint template
-│   │   └── profile_dialog.blp       # Profile create/edit dialog template
-│   ├── icons/                       # Scalable + symbolic app icons (SVG)
-│   ├── *.desktop.in                 # XDG desktop entry (Meson template)
-│   ├── *.metainfo.xml               # AppStream metadata (Flathub)
-│   ├── *.Daemon.service             # systemd user service unit
-│   └── *.gresource.xml             # GResource manifest
+│   │   ├── window.blp          # Main window Blueprint template
+│   │   └── profile_dialog.blp  # Profile create/edit dialog template
+│   ├── icons/hicolor/          # App icons (scalable + symbolic + sizes)
+│   ├── io.github.nidszxh.Autowire.gresource.xml
+│   ├── io.github.nidszxh.Autowire.desktop.in
+│   ├── io.github.nidszxh.Autowire.metainfo.xml
+│   ├── io.github.nidszxh.Autowire.Daemon.service    # systemd user service
+│   └── io.github.nidszxh.Autowire.service            # D-Bus session autostart
 ├── src/
-│   ├── main.py                      # Adw.Application entry point
-│   ├── window.py                    # Main window controller
-│   ├── profile_dialog.py            # Profile create/edit dialog
-│   ├── config_mgr.py                # JSON profile storage (atomic writes)
-│   ├── daemon.py                    # Routing engine + WpMonitor wiring
-│   ├── daemon_main.py               # Headless daemon process entry point
-│   └── wp_monitor.py                # libwireplumber GObject wrapper
+│   ├── autowire.in             # UI launcher (Meson template)
+│   ├── autowire-daemon.in      # Daemon launcher (Meson template)
+│   ├── __init__.py
+│   ├── main.py                 # Adw.Application entry point
+│   ├── window.py               # Main window (profile list)
+│   ├── profile_dialog.py        # Create/edit dialog (async device loading)
+│   ├── config_mgr.py           # Atomic JSON profile storage
+│   ├── daemon.py              # Routing engine (wpctl calls, cooldown)
+│   ├── daemon_main.py         # Daemon process (GLib.MainLoop, no GTK)
+│   └── wp_monitor.py          # Wp.Core + Wp.ObjectManager wrapper
 ├── tests/
-│   ├── test_config_mgr.py           # 12 unit tests for config manager
-│   └── test_daemon_routing.py       # 9 unit tests for routing engine
+│   ├── conftest.py
+│   ├── test_config_mgr.py     # 14 tests
+│   ├── test_daemon_routing.py # 23 tests
+│   └── test_wp_monitor.py     # 18 tests
+├── docs/
+│   └── architecture.md        # Detailed architecture reference
 ├── io.github.nidszxh.Autowire.json  # Flatpak manifest
 ├── meson.build
-└── meson_options.txt
+├── meson_options.txt
+├── pitch.md                   # Product pitch / vision
+├── flow.md                    # First-time user experience flow
+├── changes_made.md           # Change log
+└── AGENTS.md                 # Agent instructions (for AI coding assistants)
 ```
 
 ---
 
-## Daemon Setup (systemd)
+## Flathub Submission
 
-After installation, enable the background daemon:
-
-```bash
-systemctl --user enable --now io.github.nidszxh.Autowire.Daemon.service
-journalctl --user -u io.github.nidszxh.Autowire.Daemon -f
-```
-
----
-
-## Flathub Submission Checklist
-
-- [ ] Create GitHub repo `nidszxh/autowire` and push code
 - [ ] Add screenshots to `data/screenshots/` (16:9, at least 3)
 - [ ] Run `flatpak-builder-lint manifest io.github.nidszxh.Autowire.json`
 - [ ] Fork [flathub/flathub](https://github.com/flathub/flathub) and open a New App PR

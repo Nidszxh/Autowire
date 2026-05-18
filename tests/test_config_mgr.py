@@ -30,7 +30,7 @@ class ConfigMgrTestCase(unittest.TestCase):
     def test_initialize_is_idempotent(self):
         config_mgr.initialize_config()
         config_mgr.initialize_config()  # should not raise
-        with open(config_mgr.CONFIG_FILE) as fh:
+        with open(config_mgr.CONFIG_FILE, encoding='utf-8') as fh:
             data = json.load(fh)
         self.assertEqual(data['profiles'], [])
 
@@ -57,6 +57,16 @@ class ConfigMgrTestCase(unittest.TestCase):
         config_mgr.save_profile('A', 'trigger_1', 'sink_1', 'src_1')
         config_mgr.save_profile('B', 'trigger_2', 'sink_2', 'src_2')
         self.assertEqual(len(config_mgr.load_profiles()), 2)
+
+    def test_save_with_bt_profile(self):
+        config_mgr.save_profile('BT', 'trigger_bt', 'sink', 'src', 'a2dp-sink-aac')
+        profiles = config_mgr.load_profiles()
+        self.assertEqual(profiles[0]['actions']['bt_profile'], 'a2dp-sink-aac')
+
+    def test_save_default_bt_profile_is_empty(self):
+        config_mgr.save_profile('NoBT', 'trigger_x', 'sink', 'src')
+        profiles = config_mgr.load_profiles()
+        self.assertEqual(profiles[0]['actions']['bt_profile'], '')
 
     # ── get ─────────────────────────────────────────────────────────────────
 
@@ -94,7 +104,7 @@ class ConfigMgrTestCase(unittest.TestCase):
 
     def test_load_returns_empty_list_on_corrupt_file(self):
         config_mgr.initialize_config()
-        with open(config_mgr.CONFIG_FILE, 'w') as fh:
+        with open(config_mgr.CONFIG_FILE, 'w', encoding='utf-8') as fh:
             fh.write('{ not valid json }}}')
         self.assertEqual(config_mgr.load_profiles(), [])
 
