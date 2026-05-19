@@ -15,8 +15,9 @@ import sys
 
 import gi
 gi.require_version('GLib', '2.0')
+gi.require_version('Gio', '2.0')
 
-from gi.repository import GLib
+from gi.repository import GLib, Gio
 
 from . import config_mgr
 from .daemon import build_monitor, check_and_route_device
@@ -25,14 +26,14 @@ from .daemon import build_monitor, check_and_route_device
 def _watch_config_file(loop: GLib.MainLoop) -> None:
     """Watch profiles.json for changes and re-apply routing for all active nodes."""
     try:
-        mon = GLib.FileMonitor.new_for_path(config_mgr.CONFIG_FILE)
+        mon = Gio.FileMonitor.new_for_path(config_mgr.CONFIG_FILE)
     except Exception as exc:
         print(f'[Daemon] WARNING: could not create config file monitor: {exc}')
         return
 
     def _on_changed(
-        _mon: GLib.FileMonitor,
-        _file: GLib.File,
+        _mon: Gio.FileMonitor,
+        _file: Gio.File,
         _other: GLib.File | None,
         _event: GLib.FileMonitorEvent,
     ) -> None:

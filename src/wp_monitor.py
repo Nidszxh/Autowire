@@ -81,9 +81,9 @@ class WpMonitor(GObject.Object):
 
     def start(self) -> None:
         """Connect to PipeWire and begin monitoring. Call once."""
-        self._core = Wp.Core.new(None, None)
-        self._core.connect('connected', self._on_core_connected)
-        self._core.connect('disconnected', self._on_core_disconnected)
+        self._core = Wp.Core.new(None, None, None)
+        GObject.Object.connect(self._core, 'connected', self._on_core_connected)
+        GObject.Object.connect(self._core, 'disconnected', self._on_core_disconnected)
         self._core.connect()
 
     def _on_core_disconnected(self, _core: Wp.Core) -> None:
@@ -165,7 +165,7 @@ class WpMonitor(GObject.Object):
         self.emit('node-added', name, description, media_class)
 
     def _on_device_added(self, device: Wp.Device) -> None:
-        props = self._get_properties(device)
+        props = self._proxy_properties(device)
         name = props.get('device.name') or ''
         description = props.get('device.description') or name
 
@@ -192,7 +192,7 @@ class WpMonitor(GObject.Object):
             self._on_device_removed(proxy)
 
     def _on_node_removed(self, node: Wp.Node) -> None:
-        props = self._get_properties(node)
+        props = _fetch_node_props(node)
         name = props.get('node.name') or ''
         if name in self._nodes:
             del self._nodes[name]
@@ -200,7 +200,7 @@ class WpMonitor(GObject.Object):
             self.emit('node-removed', name)
 
     def _on_device_removed(self, device: Wp.Device) -> None:
-        props = self._get_properties(device)
+        props = _fetch_node_props(device)
         name = props.get('device.name') or ''
         if name in self._devices:
             del self._devices[name]
