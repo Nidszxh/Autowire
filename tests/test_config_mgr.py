@@ -2,17 +2,14 @@
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 
-# conftest.py already inserts the project root; import via package
 from src import config_mgr
 
 
 class ConfigMgrTestCase(unittest.TestCase):
     def setUp(self):
-        """Point config_mgr at a fresh temporary directory for each test."""
         self._tmpdir = tempfile.mkdtemp()
         config_mgr.CONFIG_DIR = self._tmpdir
         config_mgr.CONFIG_FILE = os.path.join(self._tmpdir, 'profiles.json')
@@ -29,7 +26,7 @@ class ConfigMgrTestCase(unittest.TestCase):
 
     def test_initialize_is_idempotent(self):
         config_mgr.initialize_config()
-        config_mgr.initialize_config()  # should not raise
+        config_mgr.initialize_config()
         with open(config_mgr.CONFIG_FILE, encoding='utf-8') as fh:
             data = json.load(fh)
         self.assertEqual(data['profiles'], [])
@@ -45,15 +42,26 @@ class ConfigMgrTestCase(unittest.TestCase):
         self.assertEqual(profiles[0]['actions']['default_sink'], 'sink_node')
         self.assertEqual(profiles[0]['actions']['default_source'], 'source_node')
 
-    def test_save_updates_existing_profile(self):
-        config_mgr.save_profile('Old Name', 'trigger_node', 'sink_a', 'source_a')
-        config_mgr.save_profile('New Name', 'trigger_node', 'sink_b', 'source_b')
+    def test_save_same_trigger_different_name_creates_multiple(self):
+        """Multiple profiles can share the same trigger device."""
+        config_mgr.save_profile('AAC High Quality', 'bt_headset', 'sink', 'mic', 'a2dp-sink-aac')
+        config_mgr.save_profile('HSP for Calls', 'bt_headset', 'sink', 'mic', 'handsfree-headset')
         profiles = config_mgr.load_profiles()
-        self.assertEqual(len(profiles), 1, 'Should update in-place, not duplicate')
-        self.assertEqual(profiles[0]['profile_name'], 'New Name')
+        self.assertEqual(len(profiles), 2)
+        names = {p['profile_name'] for p in profiles}
+        self.assertEqual(names, {'AAC High Quality', 'HSP for Calls'})
+        triggers = {p['trigger_device_name'] for p in profiles}
+        self.assertEqual(triggers, {'bt_headset'})
+
+    def test_save_same_trigger_and_name_replaces(self):
+        """Saving with the same trigger+name updates in-place."""
+        config_mgr.save_profile('My Profile', 'trigger', 'sink_a', 'src_a')
+        config_mgr.save_profile('My Profile', 'trigger', 'sink_b', 'src_b')
+        profiles = config_mgr.load_profiles()
+        self.assertEqual(len(profiles), 1)
         self.assertEqual(profiles[0]['actions']['default_sink'], 'sink_b')
 
-    def test_save_multiple_profiles(self):
+    def test_save_multiple_profiles_different_triggers(self):
         config_mgr.save_profile('A', 'trigger_1', 'sink_1', 'src_1')
         config_mgr.save_profile('B', 'trigger_2', 'sink_2', 'src_2')
         self.assertEqual(len(config_mgr.load_profiles()), 2)
@@ -70,35 +78,60 @@ class ConfigMgrTestCase(unittest.TestCase):
 
     # ── get ─────────────────────────────────────────────────────────────────
 
-    def test_get_profile_returns_correct_profile(self):
+    def test_get_profile_by_trigger_and_name(self):
         config_mgr.save_profile('Home', 'trigger_home', 'sink', 'src')
         config_mgr.save_profile('Work', 'trigger_work', 'sink2', 'src2')
-        p = config_mgr.get_profile('trigger_home')
+        p = config_mgr.get_profile('trigger_home', 'Home')
         self.assertIsNotNone(p)
         self.assertEqual(p['profile_name'], 'Home')
 
-    def test_get_profile_returns_none_for_unknown(self):
-        self.assertIsNone(config_mgr.get_profile('nonexistent_trigger'))
+    def test_get_profile_returns_none_for_unknown_trigger(self):
+        self.assertIsNone(config_mgr.get_profile('nonexistent_trigger', 'any_name'))
+
+    def test_get_profile_returns_none_for_unknown_name(self):
+        config_mgr.save_profile('Existing', 'trigger', 'sink', 'src')
+        self.assertIsNone(config_mgr.get_profile('trigger', 'NonExistent'))
+
+    def test_get_profiles_for_trigger_returns_all_matching(self):
+        config_mgr.save_profile('AAC', 'bt_headset', 'sink', 'mic', 'a2dp-sink-aac')
+        config_mgr.save_profile('HSP', 'bt_headset', 'sink', 'mic', 'handsfree-headset')
+        config_mgr.save_profile('Unrelated', 'other_device', 'sink', 'mic')
+        results = config_mgr.get_profiles_for_trigger('bt_headset')
+        self.assertEqual(len(results), 2)
+        names = {p['profile_name'] for p in results}
+        self.assertEqual(names, {'AAC', 'HSP'})
+
+    def test_get_profiles_for_trigger_returns_empty_for_unknown(self):
+        self.assertEqual(config_mgr.get_profiles_for_trigger('unknown'), [])
 
     # ── delete ──────────────────────────────────────────────────────────────
 
-    def test_delete_profile(self):
+    def test_delete_profile_removes_one_specific_entry(self):
         config_mgr.save_profile('Home', 'trigger_home', 'sink', 'src')
-        result = config_mgr.delete_profile('trigger_home')
+        config_mgr.save_profile('Work', 'trigger_home', 'sink2', 'src2')
+        result = config_mgr.delete_profile('trigger_home', 'Home')
         self.assertTrue(result)
-        self.assertEqual(config_mgr.load_profiles(), [])
+        profiles = config_mgr.load_profiles()
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]['profile_name'], 'Work')
 
     def test_delete_nonexistent_profile_returns_false(self):
-        result = config_mgr.delete_profile('ghost_trigger')
+        result = config_mgr.delete_profile('ghost_trigger', 'ghost_name')
         self.assertFalse(result)
 
     def test_delete_does_not_affect_other_profiles(self):
         config_mgr.save_profile('A', 'trigger_a', 's', 'src')
         config_mgr.save_profile('B', 'trigger_b', 's', 'src')
-        config_mgr.delete_profile('trigger_a')
+        config_mgr.delete_profile('trigger_a', 'A')
         profiles = config_mgr.load_profiles()
         self.assertEqual(len(profiles), 1)
         self.assertEqual(profiles[0]['profile_name'], 'B')
+
+    def test_delete_wrong_name_returns_false(self):
+        config_mgr.save_profile('My Profile', 'trigger_x', 'sink', 'src')
+        result = config_mgr.delete_profile('trigger_x', 'Wrong Name')
+        self.assertFalse(result)
+        self.assertEqual(len(config_mgr.load_profiles()), 1)
 
     # ── resilience ──────────────────────────────────────────────────────────
 

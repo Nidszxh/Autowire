@@ -116,11 +116,15 @@ def check_and_route_device(
         return False
 
     profiles = config_mgr.load_profiles()
+    matched = False
 
     for profile in profiles:
         if profile.get('trigger_device_name') != connected_node_name:
             continue
+        if not profile.get('is_active'):
+            continue
 
+        matched = True
         print(f'[Daemon] Matched profile: {profile["profile_name"]!r}')
         actions = profile.get('actions', {})
 
@@ -140,10 +144,9 @@ def check_and_route_device(
                 if global_id and global_id > 0:
                     set_bt_profile(global_id, bt_profile)
 
+    if matched:
         _last_routed[connected_node_name] = now
-        return True
-
-    return False
+    return matched
 
 
 def build_monitor() -> WpMonitor:

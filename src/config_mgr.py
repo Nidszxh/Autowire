@@ -28,17 +28,50 @@ def load_profiles() -> list[dict]:
     initialize_config()
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as fh:
-            return json.load(fh).get('profiles', [])
+            profiles = json.load(fh).get('profiles', [])
     except (json.JSONDecodeError, IOError, KeyError):
         return []
 
+    for p in profiles:
+        if 'is_active' not in p:
+            p['is_active'] = False
 
-def get_profile(trigger_device_name: str) -> dict | None:
-    """Returns the profile matching *trigger_device_name*, or None."""
+    has_active = any(p.get('is_active') for p in profiles)
+    if profiles and not has_active:
+        profiles[0]['is_active'] = True
+        _write_atomic({'profiles': profiles})
+
+    return profiles
+
+
+def get_profile(trigger_device_name: str, profile_name: str) -> dict | None:
+    """Returns the profile matching *trigger_device_name* and *profile_name*, or None."""
     for p in load_profiles():
-        if p.get('trigger_device_name') == trigger_device_name:
+        if p.get('trigger_device_name') == trigger_device_name and p.get('profile_name') == profile_name:
             return p
     return None
+
+
+def get_profiles_for_trigger(trigger_device_name: str) -> list[dict]:
+    """Returns all profiles that have *trigger_device_name* as their trigger."""
+    return [p for p in load_profiles() if p.get('trigger_device_name') == trigger_device_name]
+
+
+def get_active_profile(trigger_device_name: str) -> dict | None:
+    """Returns the active profile for *trigger_device_name*, or None."""
+    for p in load_profiles():
+        if p.get('trigger_device_name') == trigger_device_name and p.get('is_active'):
+            return p
+    return None
+
+
+def set_active_profile(trigger_device_name: str, profile_name: str) -> None:
+    """Sets the active profile for a trigger, deactivating all others."""
+    profiles = load_profiles()
+    for p in profiles:
+        if p.get('trigger_device_name') == trigger_device_name:
+            p['is_active'] = p.get('profile_name') == profile_name
+    _write_atomic({'profiles': profiles})
 
 
 def save_profile(
@@ -47,45 +80,72 @@ def save_profile(
     default_sink: str,
     default_source: str,
     bt_profile: str = '',
+    is_active: bool = False,
 ) -> None:
-    """Inserts or updates a profile rule, then persists atomically.
+    """Adds a new profile rule (allows multiple profiles per trigger device).
 
-    *bt_profile* is the Bluetooth profile name (e.g. ``a2dp-sink-aac``)
-    to switch to when the trigger device connects.  An empty string means
-    "don't touch the BT profile".
+    Uniqueness is enforced on the (trigger_device_name, profile_name) pair.
+    If a profile with the same name already exists for this trigger, it is
+    replaced with the new values.
+
+    When *is_active* is True, all other profiles for the same trigger are
+    deactivated first to ensure only one active profile per trigger.
     """
     profiles = load_profiles()
 
-    for p in profiles:
-        if p['trigger_device_name'] == trigger_device:
-            p['profile_name'] = profile_name
-            p['actions']['default_sink'] = default_sink
-            p['actions']['default_source'] = default_source
-            p['actions']['bt_profile'] = bt_profile
-            break
-    else:
-        profiles.append({
-            'profile_name': profile_name,
-            'trigger_device_name': trigger_device,
-            'actions': {
-                'default_sink': default_sink,
-                'default_source': default_source,
-                'bt_profile': bt_profile,
-            },
-        })
+    for i, p in enumerate(profiles):
+        if p.get('trigger_device_name') == trigger_device and p.get('profile_name') == profile_name:
+            profiles[i] = {
+                'profile_name': profile_name,
+                'trigger_device_name': trigger_device,
+                'is_active': is_active,
+                'actions': {
+                    'default_sink': default_sink,
+                    'default_source': default_source,
+                    'bt_profile': bt_profile,
+                },
+            }
+            if is_active:
+                for j, other in enumerate(profiles):
+                    if j != i and other.get('trigger_device_name') == trigger_device:
+                        profiles[j]['is_active'] = False
+            _write_atomic({'profiles': profiles})
+            print(f'[Config] Updated profile: {profile_name!r} for {trigger_device!r}')
+            return
 
+    if is_active:
+        for p in profiles:
+            if p.get('trigger_device_name') == trigger_device:
+                p['is_active'] = False
+
+    profiles.append({
+        'profile_name': profile_name,
+        'trigger_device_name': trigger_device,
+        'is_active': is_active,
+        'actions': {
+            'default_sink': default_sink,
+            'default_source': default_source,
+            'bt_profile': bt_profile,
+        },
+    })
     _write_atomic({'profiles': profiles})
-    print(f'[Config] Saved profile: {profile_name!r}')
+    print(f'[Config] Saved profile: {profile_name!r} for {trigger_device!r}')
 
 
-def delete_profile(trigger_device_name: str) -> bool:
-    """Removes the profile for *trigger_device_name*. Returns True if found."""
+def delete_profile(trigger_device_name: str, profile_name: str) -> bool:
+    """Removes the profile matching *trigger_device_name* and *profile_name*.
+    
+    Returns True if found and removed.
+    """
     profiles = load_profiles()
-    filtered = [p for p in profiles if p['trigger_device_name'] != trigger_device_name]
+    filtered = [
+        p for p in profiles
+        if not (p.get('trigger_device_name') == trigger_device_name and p.get('profile_name') == profile_name)
+    ]
     if len(filtered) == len(profiles):
         return False
     _write_atomic({'profiles': filtered})
-    print(f'[Config] Deleted profile for trigger: {trigger_device_name!r}')
+    print(f'[Config] Deleted profile: {profile_name!r} for {trigger_device_name!r}')
     return True
 
 

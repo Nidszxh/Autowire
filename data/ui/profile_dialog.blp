@@ -97,6 +97,13 @@ template $ProfileDialog : Adw.Dialog {
               }
             }
 
+            Adw.PreferencesGroup {
+              Adw.SwitchRow active_row {
+                title: _("Activate on Connect");
+                subtitle: _("When enabled, this profile fires automatically when the trigger device connects. Only one profile per trigger can be active.");
+              }
+            }
+
           };
         };
       }

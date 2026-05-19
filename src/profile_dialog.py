@@ -43,6 +43,7 @@ class ProfileDialog(Adw.Dialog):
     sink_row: Adw.ComboRow = Gtk.Template.Child()
     source_row: Adw.ComboRow = Gtk.Template.Child()
     bt_profile_row: Adw.ComboRow = Gtk.Template.Child()
+    active_row: Adw.SwitchRow = Gtk.Template.Child()
     save_button: Gtk.Button = Gtk.Template.Child()
     cancel_button: Gtk.Button = Gtk.Template.Child()
 
@@ -89,10 +90,18 @@ class ProfileDialog(Adw.Dialog):
 
         self.content_stack.set_visible_child_name('ready')
         self._nodes_ready = True
-        self._validate()
+        GLib.idle_add(self._on_devices_loaded_idle)
 
+    def _on_devices_loaded_idle(self) -> None:
+        self._validate()
         if self._profile:
             self._prefill(self._profile)
+
+    def _on_combo_changed(self, *_args) -> None:
+        self._validate()
+
+    def _on_switch_changed(self, *_args) -> None:
+        self._validate()
 
     def _populate_device_lists(self) -> None:
         nodes = get_audio_nodes_sync()
@@ -121,8 +130,7 @@ class ProfileDialog(Adw.Dialog):
         self.source_row.connect('notify::selected', self._on_combo_changed)
         self._validate()
 
-    def _on_combo_changed(self, *_args) -> None:
-        self._validate()
+        self.active_row.connect('notify::active', self._validate)
 
     def _prefill(self, profile: dict) -> None:
         """Pre-select values when editing an existing profile."""
@@ -137,6 +145,8 @@ class ProfileDialog(Adw.Dialog):
 
         bt_profile = actions.get('bt_profile', '')
         self._select_bt_profile(bt_profile)
+
+        self.active_row.set_active(profile.get('is_active', False))
 
     @staticmethod
     def _select_by_name(combo: Adw.ComboRow, node_list: list[dict], name: str) -> None:
@@ -177,7 +187,8 @@ class ProfileDialog(Adw.Dialog):
         sink_node = self._sink_nodes[sink_idx]['name'] if sink_idx != _INVALID else ''
         source_node = self._source_nodes[source_idx]['name'] if source_idx != _INVALID else ''
         bt_profile_key = self.BT_PROFILES[bt_idx][0] if bt_idx != _INVALID else ''
+        is_active = self.active_row.get_active()
 
-        config_mgr.save_profile(name, trigger_node, sink_node, source_node, bt_profile_key)
+        config_mgr.save_profile(name, trigger_node, sink_node, source_node, bt_profile_key, is_active)
         self.emit('profile-saved')
         self.close()

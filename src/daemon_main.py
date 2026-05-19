@@ -73,7 +73,11 @@ def main() -> int:
 
     _watch_config_file(loop)
 
-    print('[Daemon] Connected to PipeWire. Listening for device events…')
+    print('[Daemon] Connected to PipeWire. Routing already-connected devices…')
+    for node in monitor.get_audio_nodes():
+        check_and_route_device(node.get('name', ''), monitor)
+
+    print('[Daemon] Listening for device events…')
 
     try:
         loop.run()

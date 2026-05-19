@@ -13,6 +13,15 @@ from . import config_mgr
 RESOURCE_PATH = '/io/github/nidszxh/Autowire/window.ui'
 
 
+def _group_by_trigger(profiles: list[dict]) -> dict[str, list[dict]]:
+    """Group profiles by trigger_device_name."""
+    groups: dict[str, list[dict]] = {}
+    for p in profiles:
+        trigger = p.get('trigger_device_name', '')
+        groups.setdefault(trigger, []).append(p)
+    return groups
+
+
 @Gtk.Template(resource_path=RESOURCE_PATH)
 class AutowireWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'AutowireWindow'
@@ -39,11 +48,11 @@ class AutowireWindow(Adw.ApplicationWindow):
 
     def refresh_profiles(self) -> None:
         """Reload all profiles from disk and repopulate the list."""
+        profiles = config_mgr.load_profiles()
+
         if self._profiles_group is not None:
             self.profiles_page.remove(self._profiles_group)
             self._profiles_group = None
-
-        profiles = config_mgr.load_profiles()
 
         if not profiles:
             self.main_stack.set_visible_child_name('empty')
@@ -51,15 +60,24 @@ class AutowireWindow(Adw.ApplicationWindow):
 
         self.main_stack.set_visible_child_name('profiles')
 
-        group = Adw.PreferencesGroup(title='Audio Profiles')
-        for profile in profiles:
-            group.add(self._build_profile_row(profile))
+        group = Adw.PreferencesGroup()
+        for trigger, trigger_profiles in _group_by_trigger(profiles).items():
+            trigger_group = Adw.PreferencesGroup()
+            trigger_group.set_title(trigger)
+            for profile in trigger_profiles:
+                trigger_group.add(self._build_profile_row(profile, len(trigger_profiles) > 1))
+            group.add(trigger_group)
 
         self.profiles_page.add(group)
         self._profiles_group = group
 
-    def _build_profile_row(self, profile: dict) -> Adw.ActionRow:
-        """Creates an ActionRow for a single profile entry."""
+    def _build_profile_row(self, profile: dict, has_siblings: bool = False) -> Adw.ActionRow:
+        """Creates an ActionRow for a single profile entry.
+
+        If *has_siblings* is True (multiple profiles share the same trigger),
+        the edit button is hidden because editing would be ambiguous.
+        """
+        profile_name = profile.get('profile_name', 'Untitled')
         trigger = profile.get('trigger_device_name', '')
         actions = profile.get('actions', {})
         subtitle_parts = []
@@ -67,23 +85,39 @@ class AutowireWindow(Adw.ApplicationWindow):
             subtitle_parts.append(f"Out: {actions['default_sink'].split('.')[-1]}")
         if actions.get('default_source'):
             subtitle_parts.append(f"In: {actions['default_source'].split('.')[-1]}")
+        if actions.get('bt_profile'):
+            subtitle_parts.append(f"BT: {actions['bt_profile']}")
 
-        row = Adw.ActionRow(
-            title=profile.get('profile_name', 'Untitled'),
-            subtitle=' · '.join(subtitle_parts) if subtitle_parts else trigger,
-        )
+        subtitle = ' · '.join(subtitle_parts) if subtitle_parts else trigger
+        row = Adw.ActionRow(title=profile_name, subtitle=subtitle)
 
-        # Edit button
-        edit_btn = Gtk.Button(
-            icon_name='document-edit-symbolic',
-            tooltip_text='Edit Profile',
-            valign=Gtk.Align.CENTER,
-        )
-        edit_btn.add_css_class('flat')
-        edit_btn.connect('clicked', self._on_edit_clicked, profile)
-        row.add_suffix(edit_btn)
+        if profile.get('is_active'):
+            check = Gtk.Image(icon_name='emblem-ok-symbolic')
+            check.add_css_class('accent-color')
+            row.add_suffix(check)
 
-        # Delete button
+        if has_siblings:
+            active_icon = 'emblem-ok-symbolic' if profile.get('is_active') else 'pan-down-symbolic'
+            toggle_btn = Gtk.Button(
+                icon_name=active_icon,
+                tooltip_text='Set as Active',
+                valign=Gtk.Align.CENTER,
+            )
+            toggle_btn.add_css_class('flat')
+            toggle_btn.connect('clicked', self._on_toggle_active_clicked, profile)
+            row.add_suffix(toggle_btn)
+
+        if not has_siblings:
+            edit_btn = Gtk.Button(
+                icon_name='document-edit-symbolic',
+                tooltip_text='Edit Profile',
+                valign=Gtk.Align.CENTER,
+            )
+            edit_btn.add_css_class('flat')
+            edit_btn.connect('clicked', self._on_edit_clicked, profile)
+            row.add_suffix(edit_btn)
+            row.set_activatable_widget(edit_btn)
+
         del_btn = Gtk.Button(
             icon_name='user-trash-symbolic',
             tooltip_text='Delete Profile',
@@ -94,7 +128,6 @@ class AutowireWindow(Adw.ApplicationWindow):
         del_btn.connect('clicked', self._on_delete_clicked, profile)
         row.add_suffix(del_btn)
 
-        row.set_activatable_widget(edit_btn)
         return row
 
     # ── event handlers ────────────────────────────────────────────────────
@@ -113,13 +146,13 @@ class AutowireWindow(Adw.ApplicationWindow):
 
     def _on_delete_clicked(self, _btn: Gtk.Button, profile: dict) -> None:
         trigger = profile.get('trigger_device_name', '')
-        if not trigger:
+        profile_name = profile.get('profile_name', '')
+        if not trigger or not profile_name:
             return
 
-        # Confirm via an Adw.AlertDialog before deleting
         alert = Adw.AlertDialog(
             heading='Delete Profile?',
-            body=f'"{profile.get("profile_name", "")}" will be permanently removed.',
+            body=f'"{profile_name}" will be permanently removed.',
         )
         alert.add_response('cancel', 'Cancel')
         alert.add_response('delete', 'Delete')
@@ -129,8 +162,16 @@ class AutowireWindow(Adw.ApplicationWindow):
 
         def _on_response(_alert: Adw.AlertDialog, response: str) -> None:
             if response == 'delete':
-                config_mgr.delete_profile(trigger)
+                config_mgr.delete_profile(trigger, profile_name)
                 self.refresh_profiles()
 
         alert.connect('response', _on_response)
         alert.present(self)
+
+    def _on_toggle_active_clicked(self, _btn: Gtk.Button, profile: dict) -> None:
+        trigger = profile.get('trigger_device_name', '')
+        profile_name = profile.get('profile_name', '')
+        if not trigger or not profile_name:
+            return
+        config_mgr.set_active_profile(trigger, profile_name)
+        self.refresh_profiles()

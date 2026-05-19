@@ -145,17 +145,10 @@ class WpMonitor(GObject.Object):
 
     @staticmethod
     def _proxy_properties(proxy: Wp.Proxy) -> Wp.Properties:
-        """Safely retrieve a proxy's Wp.Properties, handling GI binding quirks."""
-        try:
-            return proxy.get_properties()
-        except TypeError:
-            return proxy.props.properties or Wp.Properties.new_empty()
-
-    # alias for backwards compatibility with _collect_node
-    _get_properties = _proxy_properties
+        return _fetch_node_props(proxy)
 
     def _on_node_added(self, node: Wp.Node) -> None:
-        props = self._get_properties(node)
+        props = _fetch_node_props(node)
         name = props.get('node.name') or ''
         description = props.get('node.description') or name
         media_class = props.get('media.class') or ''
@@ -230,12 +223,15 @@ def _collect_node(props: Wp.Properties) -> dict | None:
     }
 
 
-def _proxy_properties(obj: Wp.Proxy) -> Wp.Properties:
+def _fetch_node_props(obj: Wp.Proxy) -> Wp.Properties:
     """Safely retrieve a proxy's Wp.Properties, handling GI binding quirks."""
     try:
         return obj.get_properties()
     except TypeError:
         return obj.props.properties or Wp.Properties.new_empty()
+
+
+_proxy_properties = _fetch_node_props
 
 
 def get_audio_nodes_sync(callback: callable | None = None, timeout_ms: int = 2000) -> list[dict] | None:

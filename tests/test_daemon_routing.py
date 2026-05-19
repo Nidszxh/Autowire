@@ -126,7 +126,7 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
     @patch('src.daemon.set_system_default')
     def test_only_matching_profile_fires(self, mock_set):
         config_mgr.save_profile('A', 'trigger_a', 'sink_a', 'src_a')
-        config_mgr.save_profile('B', 'trigger_b', 'sink_b', 'src_b')
+        config_mgr.save_profile('B', 'trigger_b', 'sink_b', 'src_b', is_active=True)
         daemon.check_and_route_device('trigger_b')
         mock_set.assert_has_calls([call('sink_b'), call('src_b')])
         self.assertEqual(mock_set.call_count, 2)
