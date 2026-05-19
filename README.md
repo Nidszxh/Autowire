@@ -14,6 +14,8 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 - Clean Libadwaita UI that matches GNOME Settings
 - Runs as a `systemd --user` service — works even when the UI is closed
 - Force high-quality Bluetooth codecs (AAC, LDAC, aptX) instead of mSBC
+- Multiple profiles per device — switch between "Music" and "Call" modes
+- Only the **active** profile fires when a device connects, eliminating race conditions
 
 ---
 
@@ -61,7 +63,7 @@ rm -rf _build && meson setup _build --prefix=/usr/local -Dprofile=development &&
 # Install system-wide (also enables the daemon via postinstall.py)
 sudo ninja -C _build install
 
-# Run tests
+# Run tests (60 tests)
 python3 -m pytest tests/ -v
 ```
 
@@ -94,16 +96,16 @@ The Flatpak manifest declares two commands:
 ┌─────────────────────────────────────────────────────┐
 │  Autowire UI (GTK4 / Adwaita)                       │
 │  • Create/edit/delete audio profiles                │
-│  • Select trigger device + actions                  │
+│  • Toggle which profile is active per device        │
 │  • Writes to profiles.json on save                  │
 └──────────────┬──────────────────────────────────────┘
                │ profiles.json
                ▼
 ┌─────────────────────────────────────────────────────┐
 │  Autowire Daemon (GLib-only, no GTK)                │
-│  • Listens to WirePlumber node/device events       │
-│  • Matches new nodes against profiles.json          │
-│  • Runs wpctl set-default / wpctl set-profile       │
+│  • Listens to WirePlumber node/device events        │
+│  • Matches new nodes against profiles.json           │
+│  • Runs wpctl set-default / wpctl set-profile        │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -112,11 +114,15 @@ The Flatpak manifest declares two commands:
 1. A device connects (USB dock, Bluetooth headset, HDMI monitor)
 2. WirePlumber creates a `WpNode` for the new audio endpoint
 3. The Daemon's `WpMonitor` catches the `node-added` signal
-4. `check_and_route_device()` looks up `profiles.json`
-5. If a profile matches the trigger device, it fires:
+4. `check_and_route_device()` looks up `profiles.json` for the `is_active` profile matching that trigger
+5. If a profile is active, it fires:
    - `wpctl set-default <sink>` — routes audio to the chosen output
    - `wpctl set-default <source>` — routes microphone to the chosen input
    - `wpctl set-profile <device_id> <bt_codec>` — forces high-quality BT codec (optional)
+
+### Active Profile Rule
+
+Only **one** profile per trigger device can be `is_active: true`. When you save a profile with "Activate on Connect" enabled, all other profiles for that trigger are automatically deactivated. The daemon only fires the active one — no race conditions.
 
 ---
 
@@ -141,25 +147,22 @@ autowire/
 │   ├── autowire-daemon.in      # Daemon launcher (Meson template)
 │   ├── __init__.py
 │   ├── main.py                 # Adw.Application entry point
-│   ├── window.py               # Main window (profile list)
+│   ├── window.py               # Main window (profile list, grouped by trigger)
 │   ├── profile_dialog.py        # Create/edit dialog (async device loading)
 │   ├── config_mgr.py           # Atomic JSON profile storage
-│   ├── daemon.py              # Routing engine (wpctl calls, cooldown)
+│   ├── daemon.py              # Routing engine (wpctl calls, is_active check)
 │   ├── daemon_main.py         # Daemon process (GLib.MainLoop, no GTK)
 │   └── wp_monitor.py          # Wp.Core + Wp.ObjectManager wrapper
 ├── tests/
 │   ├── conftest.py
-│   ├── test_config_mgr.py     # 14 tests
+│   ├── test_config_mgr.py     # 20 tests
 │   ├── test_daemon_routing.py # 23 tests
-│   └── test_wp_monitor.py     # 18 tests
+│   └── test_wp_monitor.py     # 17 tests
 ├── docs/
 │   └── architecture.md        # Detailed architecture reference
 ├── io.github.nidszxh.Autowire.json  # Flatpak manifest
 ├── meson.build
 ├── meson_options.txt
-├── pitch.md                   # Product pitch / vision
-├── flow.md                    # First-time user experience flow
-├── changes_made.md           # Change log
 └── AGENTS.md                 # Agent instructions (for AI coding assistants)
 ```
 

@@ -35,7 +35,7 @@ rm -rf _build && meson setup _build --prefix=/usr/local -Dprofile=development &&
 ## Testing
 
 ```bash
-# All tests (55 total)
+# All tests (60 total)
 python3 -m pytest tests/ -v
 
 # Single file
@@ -53,10 +53,10 @@ Tests are hardware-free — all WirePlumber/PipeWire calls are mocked with `@pat
 src/
   autowire.in / autowire-daemon.in   # Meson launcher templates
   main.py                            # UI entry (GTK/Adwaita)
-  window.py                          # Profile list window
-  profile_dialog.py                  # Create/edit dialog
-  config_mgr.py                      # profiles.json persistence
-  daemon.py                          # Routing engine (wpctl calls)
+  window.py                          # Profile list window (grouped by trigger)
+  profile_dialog.py                  # Create/edit dialog (async device loading)
+  config_mgr.py                      # profiles.json persistence + is_active logic
+  daemon.py                          # Routing engine (is_active check, wpctl calls)
   daemon_main.py                     # Daemon process (GLib only)
   wp_monitor.py                      # WirePlumber WpCore wrapper
 
@@ -65,9 +65,9 @@ data/ui/
 
 tests/
   conftest.py                        # sys.path setup for src/ imports
-  test_config_mgr.py                # 14 tests
+  test_config_mgr.py                # 20 tests
   test_daemon_routing.py            # 23 tests
-  test_wp_monitor.py                # 18 tests
+  test_wp_monitor.py                # 17 tests
 ```
 
 ## Architecture Notes
@@ -82,6 +82,10 @@ When adding features:
 - GTK UI logic goes in `window.py` or `profile_dialog.py`
 - Shared data logic goes in `config_mgr.py`
 - Never import GTK from `daemon.py` or `daemon_main.py`
+
+### Profile Activation
+
+Each profile has an `is_active` boolean. Only one profile per trigger device can be active at a time. When `save_profile()` is called with `is_active=True`, it automatically deactivates all sibling profiles for that trigger. `daemon.check_and_route_device()` skips any profile where `is_active` is not True.
 
 ## Code Style
 
@@ -110,4 +114,9 @@ wpctl inspect <node_id>
 **List all nodes:**
 ```bash
 wpctl status
+```
+
+**Profile config location:**
+```bash
+cat ~/.config/autowire/profiles.json
 ```

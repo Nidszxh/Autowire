@@ -1,6 +1,7 @@
 # Autowire — Agent Instructions
 
 ## Project Overview
+
 Libadwaita-native GTK4 application for automated PipeWire/WirePlumber audio profile switching. Two processes: a GTK UI and a headless systemd daemon, both Python. Meson + Blueprint build.
 
 ## Architecture
@@ -70,16 +71,19 @@ python3 -m pytest tests/test_daemon_routing.py -v
 python3 -m pytest tests/test_daemon_routing.py::SetBtProfileTestCase -v
 ```
 
-Test count: **55** (14 config_mgr + 23 daemon + 18 wp_monitor).
+Test count: **60** (20 config_mgr + 23 daemon + 17 wp_monitor).
 
-## Profile Data Model (persisted to `~/.config/autowire/profiles.json`)
+## Profile Data Model
+
+Persisted at `~/.config/autowire/profiles.json` (atomic write via `tempfile.mkstemp` → `os.replace`).
 
 ```json
 {
   "profiles": [
     {
-      "profile_name": "Desk Setup",
+      "profile_name": "AAC High Quality",
       "trigger_device_name": "bluez_output.XX_XX_XX_XX_XX_XX.a2dp-sink",
+      "is_active": true,
       "actions": {
         "default_sink": "bluez_output.XX_XX_XX_XX_XX_XX.a2dp-sink",
         "default_source": "alsa_input.usb-analog-mic",
@@ -90,10 +94,22 @@ Test count: **55** (14 config_mgr + 23 daemon + 18 wp_monitor).
 }
 ```
 
+**Key facts:**
+- **Multiple profiles per trigger allowed.** Uniqueness is `(trigger_device_name, profile_name)` — the same device can have profiles named "AAC for Music" and "HSP for Calls" simultaneously.
+- **`is_active` selects the fired profile.** Only one profile per trigger can have `is_active: true`. Saving with `is_active=True` auto-deactivates all other profiles for that trigger. On load, the first profile is auto-activated if none is active yet (and the file is re-written with the migration).
 - `trigger_device_name` matches PipeWire `node.name`.
 - `bt_profile` is optional (empty = don't change). Valid values: `a2dp-sink-aac`, `a2dp-sink-ldac`, `a2dp-sink-aptx`, `a2dp-sink-aptx_hd`, `a2dp-sink-sbc_xq`, `a2dp-sink-sbc`, `handsfree-headset`.
 - Writes are atomic: `tempfile.mkstemp()` → `os.replace()` — crash-safe.
 - On load error, `load_profiles()` returns `[]`.
+
+**API summary (`config_mgr.py`):**
+- `load_profiles()` → `list[dict]` — loads and migrates profiles (adds `is_active: false` to old entries; auto-activates first if none active)
+- `get_profile(trigger, name)` → `dict | None`
+- `get_profiles_for_trigger(trigger)` → `list[dict]`
+- `get_active_profile(trigger)` → `dict | None`
+- `set_active_profile(trigger, name)` → deactivates all others for that trigger, activates the named one
+- `save_profile(name, trigger, sink, source, bt_profile, is_active)` → upserts by `(trigger, name)`; if `is_active=True`, deactivates siblings first
+- `delete_profile(trigger, name)` → removes matching entry
 
 ## WpMonitor: WirePlumber Integration
 
@@ -132,12 +148,41 @@ daemon_main.py:main()
 WpMonitor._on_node_added()
     └─► daemon._on_node_added() → check_and_route_device(name, monitor)
             ├► 5s cooldown check (_last_routed per node)
+            ├► load_profiles() → find profile where trigger == name AND is_active == True
             ├► set_system_default(sink)
             ├► set_system_default(source)
             └► if bt_profile: set_bt_profile(global_id, bt_profile)
 ```
 
-**Config file change path:** When `profiles.json` is modified, `GLib.FileMonitor` fires `changed` → re-routes all currently active nodes so edits apply immediately without reconnecting hardware.
+**Startup routing:** After `monitor.start()` connects to WirePlumber, `daemon_main.py` immediately iterates `monitor.get_audio_nodes()` and calls `check_and_route_device()` on each already-connected node.
+
+**Config file change path:** When `profiles.json` is modified, `GLib.FileMonitor` fires `changed` → builds a new monitor → re-routes all active nodes → stops the temporary monitor.
+
+**Only one profile fires per trigger.** `check_and_route_device()` skips any profile where `is_active != True`, so the race-condition from firing multiple profiles is eliminated.
+
+## AutowireWindow (`window.py`)
+
+- `Adw.ApplicationWindow` using `@Gtk.Template(resource_path='/io/github/nidszxh/Autowire/window.ui')`
+- Shows a `main_stack` with two pages: `empty` (Adw.StatusPage with "Add Profile" button) and `profiles` (grouped list)
+- Profiles grouped by `trigger_device_name` using `_group_by_trigger()`. Each trigger gets its own `Adw.PreferencesGroup` with the trigger name as the group title
+- `_build_profile_row()` creates an `Adw.ActionRow` per profile:
+  - `is_active=True`: shows a `emblem-ok-symbolic` icon in accent color
+  - **has_siblings (multiple profiles for same trigger)**: shows a toggle button (`emblem-ok-symbolic` if active, `pan-down-symbolic` if not); clicking it calls `set_active_profile()` and refreshes
+  - **no siblings (single profile)**: shows an Edit button
+  - Delete button on every row (opens `Adw.AlertDialog` for confirmation)
+- `refresh_profiles()` clears and rebuilds the list from disk on every call
+
+## ProfileDialog (`profile_dialog.py`)
+
+- `Adw.Dialog` using `@Gtk.Template(resource_path='/io/github/nidszxh/Autowire/profile_dialog.ui')`
+- Widgets: `content_stack`, `name_entry`, `trigger_row`, `sink_row`, `source_row`, `bt_profile_row`, `active_row`, `save_button`, `cancel_button`
+- `active_row` is an `Adw.SwitchRow` controlling the `is_active` flag
+- `content_stack` is a `Gtk.Stack` with `loading` (spinner + "Scanning audio devices…" label) and `ready` (the form) pages. Dialog shows spinner immediately on open; switches to `ready` when devices finish loading.
+- `BT_PROFILES` class constant: `[(key, label), ...]` — key is `''` for "Don't change"
+- Device lists loaded **asynchronously** via `threading.Thread(daemon=True)` → `get_audio_nodes_sync()` → `GLib.idle_add` → `_on_devices_loaded()`
+- `_on_devices_loaded()` sets `Gtk.StringList` models on ComboRows using `description` for display. Trigger selection uses the `name` field (PipeWire technical names). Then `GLib.idle_add` schedules `_on_devices_loaded_idle()` to run `_validate()` and `_prefill()` on the next GLib iteration — this ensures the model change has propagated before the combo's `notify::selected` signal fires.
+- Save button enabled when name is non-empty AND trigger is selected (`!= Gtk.INVALID_LIST_POSITION`)
+- On save: reads all combo selections, calls `config_mgr.save_profile()`, emits `profile-saved`, closes dialog
 
 ## Testing
 
@@ -146,16 +191,6 @@ WpMonitor._on_node_added()
 - Daemon tests: `@patch('src.daemon.subprocess.run')` to mock `wpctl`
 - `CheckAndRouteDeviceTestCase.setUp()` clears `daemon._last_routed` to prevent cross-test leakage
 - Routing tests pass a mock `WpMonitor` via `monitor=mock_monitor` to test BT profile resolution
-
-## ProfileDialog
-
-- `Adw.Dialog` subclass using `@Gtk.Template(resource_path='/io/github/nidszxh/Autowire/profile_dialog.ui')`
-- Widgets: `content_stack`, `name_entry`, `trigger_row`, `sink_row`, `source_row`, `bt_profile_row`, `save_button`, `cancel_button`
-- `content_stack` is a `Gtk.Stack` with `loading` (spinner + "Scanning audio devices…" label) and `ready` (the form) pages. Dialog shows spinner immediately on open; switches to `ready` when `_on_devices_loaded` fires.
-- `BT_PROFILES` class constant: `[(key, label), ...]` — key is `''` for "Don't change"
-- Device lists are loaded **asynchronously** via `threading.Thread` (daemon=True) → `get_audio_nodes_sync()` → `GLib.idle_add` → `_on_devices_loaded()`. Dialog appears immediately; combo rows populate when the thread delivers results.
-- `_on_devices_loaded()` sets `Gtk.StringList` models on the ComboRows using the `description` field (human-readable labels, e.g. `JLab GO Air Pop`). Trigger selection uses the `name` field (PipeWire technical names, e.g. `bluez_output.0F_56_...`) stored in `profile.trigger_device_name`.
-- Save button enabled when name is non-empty AND trigger is selected (`!= Gtk.INVALID_LIST_POSITION`)
 
 ## Important Constraints
 
@@ -167,11 +202,12 @@ WpMonitor._on_node_added()
 - **Postinstall enables systemd service**: `ninja -C _build install` copies `io.github.nidszxh.Autowire.Daemon.service` to `~/.config/systemd/user/` and runs `systemctl --user enable --now`
 - **Flatpak D-Bus autostart**: `data/io.github.nidszxh.Autowire.service` tells the D-Bus session bus to start `autowire-daemon` on login
 - **Delete confirmation** uses `Adw.AlertDialog` with destructive response
+- **`Adw.PreferencesGroup` title via constructor is broken in GTK4** — always use `set_title()` after construction
 
 ## Wp 0.5 API Quirks
 
-- **`Proxy.get_properties()` may raise `TypeError`** on some Wp 0.5 builds. Use `_proxy_properties(proxy)` in `wp_monitor.py` which falls back to `proxy.props.properties` on `TypeError`. `_get_properties` is an alias of `_proxy_properties` for backward compatibility.
-- **`get_audio_nodes_sync()` uses `wpctl` directly** — no `GLib.MainLoop` blocking or `GLib.Thread`. Calls `wpctl status` to find node IDs, then `wpctl inspect <id>` for each to get `node.name` and `node.description`. Returns in ~0.2s. If a *callback* is passed, fires it via `GLib.idle_add`.
+- **`Proxy.get_properties()` may raise `TypeError`** on some Wp 0.5 builds. Use `_proxy_properties(proxy)` which falls back to `proxy.props.properties` on `TypeError`. `_get_properties` is an alias of `_proxy_properties` for backward compatibility with tests.
+- **`get_audio_nodes_sync()` uses `wpctl` directly** — no `GLib.MainLoop` blocking. Calls `wpctl status` to find node IDs, then `wpctl inspect <id>` for each to get `node.name` and `node.description`. Returns in ~0.2s. If a *callback* is passed, fires it via `GLib.idle_add`.
 - **`Wp.Properties` constructors** are `new_empty()`, `new_string(str)`, `new_copy()` — `Wp.Properties()` raises a boxed-type error.
 
 ## Icon Sizes
