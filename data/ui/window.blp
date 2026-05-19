@@ -15,6 +15,12 @@ template $AutowireWindow : Adw.ApplicationWindow {
         tooltip-text: _("Add Profile");
         styles ["suggested-action"]
       }
+
+      Button about_button {
+        icon-name: "help-about-symbolic";
+        tooltip-text: _("About");
+        styles ["flat"]
+      }
     }
 
     content: Stack main_stack {

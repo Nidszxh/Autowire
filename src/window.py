@@ -11,6 +11,9 @@ from gi.repository import Adw, Gtk
 from . import config_mgr
 
 RESOURCE_PATH = '/io/github/nidszxh/Autowire/window.ui'
+APP_VERSION = '0.1.0'
+
+APP_VERSION = '0.1.0'
 
 
 def _group_by_trigger(profiles: list[dict]) -> dict[str, list[dict]]:
@@ -28,6 +31,7 @@ class AutowireWindow(Adw.ApplicationWindow):
 
     # Widgets bound from the Blueprint template
     add_button: Gtk.Button = Gtk.Template.Child()
+    about_button: Gtk.Button = Gtk.Template.Child()
     main_stack: Gtk.Stack = Gtk.Template.Child()
     profiles_page: Adw.PreferencesPage = Gtk.Template.Child()
     empty_add_button: Gtk.Button = Gtk.Template.Child()
@@ -43,6 +47,7 @@ class AutowireWindow(Adw.ApplicationWindow):
     def _connect_signals(self) -> None:
         self.add_button.connect('clicked', self._on_add_clicked)
         self.empty_add_button.connect('clicked', self._on_add_clicked)
+        self.about_button.connect('clicked', self._on_about_clicked)
 
     # ── profile list ──────────────────────────────────────────────────────
 
@@ -63,7 +68,7 @@ class AutowireWindow(Adw.ApplicationWindow):
         group = Adw.PreferencesGroup()
         for trigger, trigger_profiles in _group_by_trigger(profiles).items():
             trigger_group = Adw.PreferencesGroup()
-            trigger_group.set_title(trigger)
+            trigger_group.set_title(f'{trigger} ({len(trigger_profiles)})')
             for profile in trigger_profiles:
                 trigger_group.add(self._build_profile_row(profile, len(trigger_profiles) > 1))
             group.add(trigger_group)
@@ -175,3 +180,16 @@ class AutowireWindow(Adw.ApplicationWindow):
             return
         config_mgr.set_active_profile(trigger, profile_name)
         self.refresh_profiles()
+
+    def _on_about_clicked(self, _btn: Gtk.Button) -> None:
+        about = Adw.AboutDialog(
+            application_name='Autowire',
+            application_icon='io.github.nidszxh.Autowire',
+            developer_name='nidszxh',
+            version=APP_VERSION,
+            comments=_('Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.'),
+            website='https://github.com/nidszxh/autowire',
+            support_url='https://github.com/nidszxh/autowire/issues',
+            license_type=Adw.License.GPL_3_0,
+        )
+        about.present(self)
