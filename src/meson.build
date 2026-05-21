@@ -1,7 +1,6 @@
 pkgdatadir_conf = conf.get('PKGDATADIR')
 application_id_conf = conf.get('APPLICATION_ID')
 
-# ── Generate the launcher script ──────────────────────────────────────────────
 launcher = configure_file(
   input: 'autowire.in',
   output: 'autowire',
@@ -9,6 +8,13 @@ launcher = configure_file(
   install: true,
   install_dir: bindir,
   install_mode: 'rwxr-xr-x',
+)
+
+custom_target('chmod-autowire',
+  input: launcher,
+  output: 'chmod-autowire.stamp',
+  build_by_default: true,
+  command: ['sh', '-c', 'chmod +x "$1" && touch "$2"', 'sh', '@INPUT@', '@OUTPUT@'],
 )
 
 daemon_launcher = configure_file(
@@ -20,7 +26,13 @@ daemon_launcher = configure_file(
   install_mode: 'rwxr-xr-x',
 )
 
-# ── Install Python package ─────────────────────────────────────────────────────
+custom_target('chmod-autowire-daemon',
+  input: daemon_launcher,
+  output: 'chmod-autowire-daemon.stamp',
+  build_by_default: true,
+  command: ['sh', '-c', 'chmod +x "$1" && touch "$2"', 'sh', '@INPUT@', '@OUTPUT@'],
+)
+
 python.install_sources(
   '__init__.py',
   'main.py',
@@ -31,4 +43,16 @@ python.install_sources(
   'daemon_main.py',
   'wp_monitor.py',
   subdir: 'autowire',
+)
+
+install_data(
+  'main.js',
+  'window.js',
+  'profile_dialog.js',
+  'config_mgr.js',
+  'daemon.js',
+  'daemon_main.js',
+  'wp_monitor.js',
+  install_dir: pkgdatadir_conf,
+  install_mode: 'r--r--r--',
 )
