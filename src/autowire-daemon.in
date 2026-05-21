@@ -1,22 +1,16 @@
-#!/usr/bin/env @PYTHON@
+#!@PYTHON@
+"""Autowire Daemon — headless audio profile routing daemon."""
 
 import os
 import sys
 
 _launch_dir = os.path.dirname(os.path.abspath(__file__))
+_dev_gresource = os.path.join(_launch_dir, '..', '_build', 'data', 'autowire.gresource')
 
-# Dev mode detection: check if _build/src/ exists
-_dev_check = os.path.join(_launch_dir, '..', '..', '_build', 'src', 'autowire')
-if os.path.exists(_dev_check):
-    # Dev mode: add project root so 'src' package is found
-    _dev_root = os.path.join(_launch_dir, '..', '..')
-    if os.path.exists(os.path.join(_dev_root, 'src', '__init__.py')):
-        sys.path.insert(0, _dev_root)
-    _pkgdatadir = os.path.join(_launch_dir, '..', '..', '_build', 'data')
+if os.path.isfile(_dev_gresource):
+    sys.path.insert(0, os.path.join(_launch_dir, '..'))
 else:
     _pkgdatadir = '@PKGDATADIR@'
-
-sys.path.insert(1, _pkgdatadir)
 
 import gi
 gi.require_version('Wp', '0.5')
@@ -24,10 +18,5 @@ gi.require_version('Wp', '0.5')
 from gi.repository import Wp
 Wp.init(Wp.InitFlags.ALL)
 
-# Import from 'src' package (dev mode) or 'autowire' (installed)
-try:
-    from src.daemon_main import main
-except ModuleNotFoundError:
-    from autowire.daemon_main import main
-
+from src.daemon_main import main
 sys.exit(main())

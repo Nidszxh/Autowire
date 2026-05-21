@@ -66,6 +66,10 @@ class WpMonitor(GObject.Object):
             GObject.SignalFlags.RUN_FIRST, None,
             (str,),             # name
         ),
+        'ready': (
+            GObject.SignalFlags.RUN_FIRST, None,
+            (),                 # monitor is fully connected and populated
+        ),
     }
 
     def __init__(self) -> None:
@@ -112,6 +116,7 @@ class WpMonitor(GObject.Object):
     def _on_om_installed(self, _om: Wp.ObjectManager) -> None:
         """Called when the ObjectManager has been fully installed."""
         print('[WpMonitor] Object Manager installed, monitoring active.')
+        self.emit('ready')
 
     def stop(self) -> None:
         """Disconnect from PipeWire and release resources."""
@@ -209,7 +214,6 @@ class WpMonitor(GObject.Object):
 
 
 def _collect_node(props: Wp.Properties) -> dict | None:
-    """Extract audio node info from a Wp.Properties, or return None."""
     name = props.get('node.name') or ''
     if not name:
         return None

@@ -176,6 +176,9 @@ class WpMonitorInternalStateTestCase(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]['name'], 'sink1')
         mock_self._nodes.clear.assert_not_called()
+
+
+class AudioMediaClassFilterTestCase(unittest.TestCase):
     """Tests for the audio media class filter."""
 
     def test_filter_accepts_audio_sink(self):

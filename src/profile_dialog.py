@@ -103,19 +103,6 @@ class ProfileDialog(Adw.Dialog):
     def _on_switch_changed(self, *_args) -> None:
         self._validate()
 
-    def _populate_device_lists(self) -> None:
-        nodes = get_audio_nodes_sync()
-        self._all_nodes = nodes
-        self._sink_nodes = [n for n in nodes if 'Sink' in n.get('media_class', '')]
-        self._source_nodes = [n for n in nodes if 'Source' in n.get('media_class', '')]
-
-        def _labels(node_list: list[dict]) -> list[str]:
-            return [n.get('description') or n.get('name', '') for n in node_list]
-
-        self.trigger_row.set_model(Gtk.StringList.new(_labels(nodes)))
-        self.sink_row.set_model(Gtk.StringList.new(_labels(self._sink_nodes)))
-        self.source_row.set_model(Gtk.StringList.new(_labels(self._source_nodes)))
-
     def _populate_bt_profiles(self) -> None:
         """Fill the Bluetooth profile combo with label-only items."""
         labels = [label for _key, label in self.BT_PROFILES]

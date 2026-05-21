@@ -13,8 +13,6 @@ from . import config_mgr
 RESOURCE_PATH = '/io/github/nidszxh/Autowire/window.ui'
 APP_VERSION = '0.1.0'
 
-APP_VERSION = '0.1.0'
-
 
 def _group_by_trigger(profiles: list[dict]) -> dict[str, list[dict]]:
     """Group profiles by trigger_device_name."""
@@ -187,7 +185,7 @@ class AutowireWindow(Adw.ApplicationWindow):
             application_icon='io.github.nidszxh.Autowire',
             developer_name='nidszxh',
             version=APP_VERSION,
-            comments=_('Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.'),
+            comments='Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.',
             website='https://github.com/nidszxh/autowire',
             support_url='https://github.com/nidszxh/autowire/issues',
             license_type=Adw.License.GPL_3_0,
