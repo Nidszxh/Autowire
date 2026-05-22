@@ -36,11 +36,6 @@ def load_profiles() -> list[dict]:
         if 'is_active' not in p:
             p['is_active'] = False
 
-    has_active = any(p.get('is_active') for p in profiles)
-    if profiles and not has_active:
-        profiles[0]['is_active'] = True
-        _write_atomic({'profiles': profiles})
-
     return profiles
 
 

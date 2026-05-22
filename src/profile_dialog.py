@@ -100,9 +100,6 @@ class ProfileDialog(Adw.Dialog):
     def _on_combo_changed(self, *_args) -> None:
         self._validate()
 
-    def _on_switch_changed(self, *_args) -> None:
-        self._validate()
-
     def _populate_bt_profiles(self) -> None:
         """Fill the Bluetooth profile combo with label-only items."""
         labels = [label for _key, label in self.BT_PROFILES]

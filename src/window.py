@@ -6,7 +6,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, GObject, Gtk
 
 from . import config_mgr
 
@@ -75,11 +75,6 @@ class AutowireWindow(Adw.ApplicationWindow):
         self._profiles_group = group
 
     def _build_profile_row(self, profile: dict, has_siblings: bool = False) -> Adw.ActionRow:
-        """Creates an ActionRow for a single profile entry.
-
-        If *has_siblings* is True (multiple profiles share the same trigger),
-        the edit button is hidden because editing would be ambiguous.
-        """
         profile_name = profile.get('profile_name', 'Untitled')
         trigger = profile.get('trigger_device_name', '')
         actions = profile.get('actions', {})
@@ -94,21 +89,11 @@ class AutowireWindow(Adw.ApplicationWindow):
         subtitle = ' · '.join(subtitle_parts) if subtitle_parts else trigger
         row = Adw.ActionRow(title=profile_name, subtitle=subtitle)
 
-        if profile.get('is_active'):
-            check = Gtk.Image(icon_name='emblem-ok-symbolic')
-            check.add_css_class('accent-color')
-            row.add_suffix(check)
-
-        if has_siblings:
-            active_icon = 'emblem-ok-symbolic' if profile.get('is_active') else 'pan-down-symbolic'
-            toggle_btn = Gtk.Button(
-                icon_name=active_icon,
-                tooltip_text='Set as Active',
-                valign=Gtk.Align.CENTER,
-            )
-            toggle_btn.add_css_class('flat')
-            toggle_btn.connect('clicked', self._on_toggle_active_clicked, profile)
-            row.add_suffix(toggle_btn)
+        switch = Gtk.Switch()
+        switch.set_active(profile.get('is_active', False))
+        switch.set_valign(Gtk.Align.CENTER)
+        switch.connect('notify::active', self._on_switch_toggled, profile)
+        row.add_suffix(switch)
 
         if not has_siblings:
             edit_btn = Gtk.Button(
@@ -171,12 +156,15 @@ class AutowireWindow(Adw.ApplicationWindow):
         alert.connect('response', _on_response)
         alert.present(self)
 
-    def _on_toggle_active_clicked(self, _btn: Gtk.Button, profile: dict) -> None:
+    def _on_switch_toggled(self, switch: Gtk.Switch, _pspec: GObject.ParamSpec, profile: dict) -> None:
         trigger = profile.get('trigger_device_name', '')
         profile_name = profile.get('profile_name', '')
         if not trigger or not profile_name:
             return
-        config_mgr.set_active_profile(trigger, profile_name)
+        if switch.get_active():
+            config_mgr.set_active_profile(trigger, profile_name)
+        else:
+            config_mgr.set_active_profile(trigger, '')
         self.refresh_profiles()
 
     def _on_about_clicked(self, _btn: Gtk.Button) -> None:
@@ -188,6 +176,6 @@ class AutowireWindow(Adw.ApplicationWindow):
             comments='Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.',
             website='https://github.com/nidszxh/autowire',
             support_url='https://github.com/nidszxh/autowire/issues',
-            license_type=Adw.License.GPL_3_0,
+            license_type=Gtk.License.GPL_3_0,
         )
         about.present(self)

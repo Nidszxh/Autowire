@@ -24,7 +24,7 @@ from . import config_mgr
 from .daemon import build_monitor, check_and_route_device
 
 
-def _watch_config_file(monitor: Any, loop: GLib.MainLoop) -> None:
+def _watch_config_file(monitor: Any) -> None:
     """Watch profiles.json for changes and re-apply routing for all active nodes."""
     try:
         mon = Gio.FileMonitor.new_for_path(config_mgr.CONFIG_FILE)
@@ -66,7 +66,7 @@ def main() -> int:
         print(f'[Daemon] Failed to connect to WirePlumber: {exc}', file=sys.stderr)
         return 1
 
-    _watch_config_file(monitor, loop)
+    _watch_config_file(monitor)
 
     def _on_monitor_ready(_mon: object) -> None:
         print('[Daemon] Routing already-connected devices…')

@@ -1,7 +1,6 @@
 """Unit tests for daemon routing logic — no hardware or WirePlumber required."""
 
 import os
-import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -107,7 +106,8 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
     def test_matching_profile_triggers_both_actions(self, mock_set):
         config_mgr.save_profile(
             'Desk Setup', 'trigger_dock',
-            'sink_usb', 'source_headset'
+            'sink_usb', 'source_headset',
+            is_active=True,
         )
         result = daemon.check_and_route_device('trigger_dock')
         self.assertTrue(result)
@@ -133,7 +133,7 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
 
     @patch('src.daemon.set_system_default')
     def test_empty_sink_skipped(self, mock_set):
-        config_mgr.save_profile('NoSink', 'trigger_x', '', 'source_y')
+        config_mgr.save_profile('NoSink', 'trigger_x', '', 'source_y', is_active=True)
         daemon.check_and_route_device('trigger_x')
         mock_set.assert_called_once_with('source_y')
 
@@ -151,7 +151,8 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
         mock_monitor.get_device_global_id.return_value = 55
         config_mgr.save_profile(
             'Headphones', 'bluez_output.12_34_56_78_9A_BC.a2dp-sink',
-            '', '', 'a2dp-sink-aac'
+            '', '', 'a2dp-sink-aac',
+            is_active=True,
         )
         result = daemon.check_and_route_device(
             'bluez_output.12_34_56_78_9A_BC.a2dp-sink',
@@ -168,7 +169,8 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
     def test_bt_profile_skipped_when_no_monitor(self, mock_bt, mock_default):
         config_mgr.save_profile(
             'Headphones', 'bluez_output.12_34_56_78_9A_BC.a2dp-sink',
-            'some_sink', '', 'a2dp-sink-aac'
+            'some_sink', '', 'a2dp-sink-aac',
+            is_active=True,
         )
         result = daemon.check_and_route_device(
             'bluez_output.12_34_56_78_9A_BC.a2dp-sink',
@@ -181,14 +183,14 @@ class CheckAndRouteDeviceTestCase(unittest.TestCase):
     @patch('src.daemon.set_bt_profile')
     def test_bt_profile_skipped_for_non_bt_node(self, mock_bt, mock_default):
         mock_monitor = MagicMock()
-        config_mgr.save_profile('USB', 'alsa_input.usb-mic', '', '', 'a2dp-sink-aac')
+        config_mgr.save_profile('USB', 'alsa_input.usb-mic', '', '', 'a2dp-sink-aac', is_active=True)
         daemon.check_and_route_device('alsa_input.usb-mic', monitor=mock_monitor)
         mock_bt.assert_not_called()
 
     @patch('src.daemon.set_system_default')
     @patch('src.daemon.set_bt_profile')
     def test_bt_profile_skipped_when_empty(self, mock_bt, mock_default):
-        config_mgr.save_profile('Headphones', 'bluez_output.aa_bb_cc_dd_ee_ff.a2dp-sink', '', '', '')
+        config_mgr.save_profile('Headphones', 'bluez_output.aa_bb_cc_dd_ee_ff.a2dp-sink', '', '', '', is_active=True)
         daemon.check_and_route_device('bluez_output.aa_bb_cc_dd_ee_ff.a2dp-sink')
         mock_bt.assert_not_called()
 

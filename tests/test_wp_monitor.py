@@ -5,7 +5,7 @@ signal declarations on WpMonitor. No live PipeWire connection needed.
 """
 
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 class CollectNodeTestCase(unittest.TestCase):
@@ -94,7 +94,6 @@ class ProxyPropertiesTestCase(unittest.TestCase):
 
     def test_returns_empty_props_when_both_fail(self):
         from src.wp_monitor import _proxy_properties
-        from gi.repository import Wp
         mock_proxy = MagicMock()
         mock_proxy.get_properties.side_effect = TypeError()
         mock_proxy.props = MagicMock(properties=None)
