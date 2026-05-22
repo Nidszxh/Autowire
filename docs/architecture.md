@@ -22,7 +22,7 @@ Both launchers are Meson templates (`src/autowire.in`, `src/autowire-daemon.in`)
 ### `config_mgr.py`
 Manages `~/.config/autowire/profiles.json`.
 
-- `load_profiles()` → `list[dict]` — reads JSON, migrates `is_active` field, auto-activates first profile if none active, returns `[]` on any error
+- `load_profiles()` → `list[dict]` — reads JSON, migrates old entries (adds `is_active: false`), returns `[]` on any error
 - `save_profile(name, trigger, sink, source, bt_profile='', is_active=False)` — upserts by `(trigger, name)`; if `is_active=True`, deactivates all siblings for that trigger first
 - `get_profile(trigger, name)` → `dict | None`
 - `get_profiles_for_trigger(trigger)` → `list[dict]`
@@ -62,7 +62,7 @@ Daemon entry point (GLib only, zero GTK imports).
 
 1. Builds `WpMonitor` and starts it
 2. Installs `GLib.FileMonitor` on `profiles.json` → re-routes all active nodes on any change
-3. Iterates `monitor.get_audio_nodes()` and routes already-connected devices immediately on startup
+3. Connects to `monitor`'s `ready` signal and routes already-connected devices once the ObjectManager is installed
 4. Runs `GLib.MainLoop` indefinitely
 5. Handles SIGTERM/SIGINT for clean shutdown
 
@@ -77,8 +77,8 @@ GTK UI entry point.
 
 - `refresh_profiles()` — clears and rebuilds `Adw.PreferencesGroup` hierarchy from disk. Shows empty page if no profiles exist.
 - `_group_by_trigger(profiles)` — groups profiles by `trigger_device_name` into nested `Adw.PreferencesGroup` per trigger
-- `_build_profile_row(profile, has_siblings)` — `Adw.ActionRow` with: active checkmark (if `is_active`), toggle button (if multiple profiles for same trigger), Edit button (if single profile), Delete button (always)
-- `_on_toggle_active_clicked(profile)` — calls `config_mgr.set_active_profile()` and refreshes
+- `_build_profile_row(profile, has_siblings)` — `Adw.ActionRow` with: `Gtk.Switch` for active state, Edit button (if single profile), Delete button (always)
+- `_on_switch_toggled(switch, _pspec, profile)` — toggles `config_mgr.set_active_profile()` on/off and refreshes
 - Delete → `Adw.AlertDialog` confirmation → `config_mgr.delete_profile()`
 
 ### `profile_dialog.py`

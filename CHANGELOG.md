@@ -16,7 +16,7 @@ All notable changes to Autowire are documented here.
 - **Daemon startup routing** — on daemon startup, iterates all currently connected audio nodes via `monitor.get_audio_nodes()` and routes each one immediately, before entering the event loop.
 
 ### Changed
-- **`config_mgr.load_profiles()`** now migrates old profiles (adds `is_active: false`), auto-activates the first profile if none is active (and writes the migration back to disk).
+- **`config_mgr.load_profiles()`** now migrates old profiles (adds `is_active: false`).
 - **`config_mgr.save_profile()`** signature extended with `is_active` parameter. When `is_active=True`, deactivates all sibling profiles for that trigger before saving.
 - **`config_mgr.get_profile()`** now takes both `(trigger_device_name, profile_name)` as arguments.
 - **`config_mgr.delete_profile()`** now takes both `(trigger_device_name, profile_name)` as arguments.
@@ -28,7 +28,7 @@ All notable changes to Autowire are documented here.
 - **`Adw.PreferencesGroup` title** — constructor `title=` argument is broken in GTK4. Now uses `set_title()` after construction instead.
 - **`wp_monitor.py` module-level scope** — removed duplicate `_proxy_properties` function at module level that shadowed the class method, causing syntax errors. Refactored to a single module-level `_fetch_node_props()` with `_proxy_properties` as an exported alias.
 - **`profile_dialog.py` missing `_on_combo_changed` body** — the signal handler method body was missing, breaking the save button enable/disable logic.
-- **`config_mgr.load_profiles()` migration write-back** — the auto-activation of the first profile was mutating the list but never writing it back to disk. Now calls `_write_atomic()` on migration.
+- **`config_mgr.load_profiles()` migration write-back** — was mutating the list but never writing it back to disk. Now calls `_write_atomic()` on migration.
 
 ### Documentation
 - **AGENTS.md** — complete rewrite with precise architecture, module API summaries, daemon flow diagrams, and GTK4 quirks.

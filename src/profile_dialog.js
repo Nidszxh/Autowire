@@ -1,0 +1,214 @@
+const { Adw, GObject, GLib, Gtk } = imports.gi;
+
+print('[ProfileDialog] module loaded');
+
+const _INVALID = Gtk.INVALID_LIST_POSITION;
+
+const BT_PROFILES = [
+    ['', "Don't change"],
+    ['a2dp-sink-aac', 'AAC (high quality)'],
+    ['a2dp-sink-ldac', 'LDAC (high quality)'],
+    ['a2dp-sink-aptx', 'aptX (high quality)'],
+    ['a2dp-sink-aptx_hd', 'aptX HD (high quality)'],
+    ['a2dp-sink-sbc_xq', 'SBC-XQ (high quality)'],
+    ['a2dp-sink-sbc', 'SBC (standard)'],
+    ['handsfree-headset', 'HSP/HFP (call / mSBC)'],
+];
+
+var ProfileDialog = GObject.registerClass({
+    Signals: {
+        'profile-saved': {},
+    },
+}, class AutowireProfileDialog extends Adw.Dialog {
+    constructor(kwargs) {
+        const profile = kwargs?.profile || null;
+        delete kwargs?.profile;
+        super(kwargs);
+
+        this.set_title(profile ? 'Edit Profile' : 'Add Profile');
+        this._profile = profile;
+        this._all_nodes = [];
+        this._sink_nodes = [];
+        this._source_nodes = [];
+
+        this._setup_ui();
+        this._connect_signals();
+        this._load_devices_async();
+    }
+
+    _setup_ui() {
+        const content = new Adw.ToolbarView();
+
+        const header_bar = new Adw.HeaderBar({
+            title_widget: new Gtk.Label({ label: this._profile ? 'Edit Profile' : 'Add Profile' }),
+        });
+
+        this._cancel_button = new Gtk.Button({ label: 'Cancel' });
+        this._cancel_button.add_css_class('flat');
+        header_bar.pack_start(this._cancel_button);
+
+        this._save_button = new Gtk.Button({ label: 'Save' });
+        this._save_button.add_css_class('suggested-action');
+        header_bar.pack_end(this._save_button);
+
+        content.add_top_bar(header_bar);
+
+        const scroll = new Gtk.ScrolledWindow({
+           vexpand: true,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        });
+
+        const main_box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            margin_top: 20,
+            margin_bottom: 20,
+            margin_start: 20,
+            margin_end: 20,
+            spacing: 16,
+        });
+
+        this._content_stack = new Gtk.Stack({ transition_type: Gtk.StackTransitionType.CROSSFADE, transition_duration: 200 });
+
+        const spinner = new Gtk.Spinner({ spinning: true, halign: Gtk.Align.CENTER, valign: Gtk.Align.CENTER });
+        spinner.set_size_request(64, 64);
+        const loading_box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, valign: Gtk.Align.CENTER, homogeneous: true, spacing: 16 });
+        loading_box.append(spinner);
+        loading_box.append(new Gtk.Label({ label: 'Scanning audio devices…', halign: Gtk.Align.CENTER }));
+        this._content_stack.add_named(loading_box, 'loading');
+
+        const form_box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12 });
+
+        this._name_entry = new Adw.EntryRow({ title: 'Profile Name', visible: true });
+        this._name_entry.set_size_request(-1, 48);
+        form_box.append(this._name_entry);
+
+        this._trigger_row = new Adw.ComboRow({
+            title: 'Trigger Device',
+            subtitle: 'Device that activates this profile',
+            visible: true,
+            model: Gtk.StringList.new(['Scanning...']),
+        });
+        this._trigger_row.set_size_request(-1, 56);
+        form_box.append(this._trigger_row);
+
+        this._sink_row = new Adw.ComboRow({
+            title: 'Default Sink (Output)',
+            subtitle: 'Audio output device',
+            visible: true,
+            model: Gtk.StringList.new(['Scanning...']),
+        });
+        this._sink_row.set_size_request(-1, 56);
+        form_box.append(this._sink_row);
+
+        this._source_row = new Adw.ComboRow({
+            title: 'Default Source (Input)',
+            subtitle: 'Audio input device',
+            visible: true,
+            model: Gtk.StringList.new(['Scanning...']),
+        });
+        this._source_row.set_size_request(-1, 56);
+        form_box.append(this._source_row);
+
+        const bt_labels = BT_PROFILES.map(([, label]) => label);
+        this._bt_profile_row = new Adw.ComboRow({ title: 'Bluetooth Profile', subtitle: 'For wireless headsets only', visible: true });
+        this._bt_profile_row.set_model(Gtk.StringList.new(bt_labels));
+        this._bt_profile_row.set_size_request(-1, 56);
+        form_box.append(this._bt_profile_row);
+
+        this._active_row = new Adw.SwitchRow({ title: 'Active', subtitle: 'Enable this profile immediately when triggered', visible: true });
+        form_box.append(this._active_row);
+
+        this._content_stack.add_named(form_box, 'ready');
+        main_box.append(this._content_stack);
+        this._content_stack.set_visible_child_name('loading');
+
+        scroll.set_child(main_box);
+        content.set_content(scroll);
+    }
+
+    _load_devices_async() {
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            const wp_monitor = imports.wp_monitor;
+            const nodes = wp_monitor.get_audio_nodes_sync();
+            this._on_devices_loaded(nodes);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _on_devices_loaded(nodes) {
+        this._all_nodes = nodes;
+        this._sink_nodes = nodes.filter(n => (n['media_class'] || '').includes('Sink'));
+        this._source_nodes = nodes.filter(n => (n['media_class'] || '').includes('Source'));
+
+        const labels = arr => arr.map(n => n['description'] || n['name'] || '');
+
+        this._trigger_row.set_model(Gtk.StringList.new(labels(nodes)));
+        this._sink_row.set_model(Gtk.StringList.new(labels(this._sink_nodes)));
+        this._source_row.set_model(Gtk.StringList.new(labels(this._source_nodes)));
+
+        this._content_stack.set_visible_child_name('ready');
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._validate();
+            if (this._profile) this._prefill(this._profile);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _connect_signals() {
+        this._save_button.connect('clicked', () => this._on_save());
+        this._cancel_button.connect('clicked', () => this.close());
+        this._name_entry.connect('notify::text', () => this._validate());
+        this._trigger_row.connect('notify::selected', () => this._validate());
+        this._active_row.connect('notify::active', () => this._validate());
+        this._validate();
+    }
+
+    _prefill(profile) {
+        this._name_entry.set_text(profile['profile_name'] || '');
+        const trigger = profile['trigger_device_name'] || '';
+        const actions = profile['actions'] || {};
+        this._select_by_name(this._trigger_row, this._all_nodes, trigger);
+        this._select_by_name(this._sink_row, this._sink_nodes, actions['default_sink'] || '');
+        this._select_by_name(this._source_row, this._source_nodes, actions['default_source'] || '');
+        this._select_bt_profile(actions['bt_profile'] || '');
+        this._active_row.set_active(profile['is_active'] || false);
+    }
+
+    _select_by_name(combo, nodeList, name) {
+        for (let i = 0; i < nodeList.length; i++) {
+            if (nodeList[i]['name'] === name) { combo.set_selected(i); return; }
+        }
+    }
+
+    _select_bt_profile(btKey) {
+        for (let i = 0; i < BT_PROFILES.length; i++) {
+            if (BT_PROFILES[i][0] === btKey) { this._bt_profile_row.set_selected(i); return; }
+        }
+    }
+
+    _validate() {
+        const ok = this._name_entry.get_text().trim().length > 0 && this._trigger_row.get_selected() !== _INVALID;
+        this._save_button.set_sensitive(ok);
+    }
+
+    _on_save() {
+        const name = this._name_entry.get_text().trim();
+        const triggerIdx = this._trigger_row.get_selected();
+        const sinkIdx = this._sink_row.get_selected();
+        const sourceIdx = this._source_row.get_selected();
+        const btIdx = this._bt_profile_row.get_selected();
+
+        if (!name || triggerIdx === _INVALID) return;
+
+        const triggerNode = this._all_nodes[triggerIdx] ? this._all_nodes[triggerIdx]['name'] : '';
+        const sinkNode = sinkIdx !== _INVALID && this._sink_nodes[sinkIdx] ? this._sink_nodes[sinkIdx]['name'] : '';
+        const sourceNode = sourceIdx !== _INVALID && this._source_nodes[sourceIdx] ? this._source_nodes[sourceIdx]['name'] : '';
+        const btProfileKey = btIdx !== _INVALID && BT_PROFILES[btIdx] ? BT_PROFILES[btIdx][0] : '';
+        const isActive = this._active_row.get_active();
+
+        imports.config_mgr.save_profile(name, triggerNode, sinkNode, sourceNode, btProfileKey, isActive);
+        this.emit('profile-saved');
+        this.close();
+    }
+});

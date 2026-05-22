@@ -1,21 +1,16 @@
 {
   "app-id": "io.github.nidszxh.Autowire",
   "runtime": "org.gnome.Platform",
-  "runtime-version": "48",
+  "runtime-version": "50",
   "sdk": "org.gnome.Sdk",
-  "commands": [
-    {"name": "autowire", "exec": "autowire", "passthrough": true},
-    {"name": "autowire-daemon", "exec": "autowire-daemon"}
-  ],
+  "command": "autowire",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
     "--socket=fallback-x11",
-    "--socket=pipewire-0",
+    "--socket=pulseaudio",
     "--talk-name=org.freedesktop.WirePlumber",
-    "--talk-name=org.freedesktop.portal.Desktop",
-    "--filesystem=/usr/bin/wpctl:ro",
-    "--system-talk-name=org.freedesktop.login1"
+    "--share=network"
   ],
   "cleanup": [
     "/include",
@@ -26,37 +21,84 @@
   ],
   "modules": [
     {
-      "name": "blueprint-compiler",
-      "buildsystem": "meson",
-      "cleanup": ["*"],
+      "name": "autowire-wrapper",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -d /app/bin",
+        "install -m 755 autowire-wrapper.sh /app/bin/autowire"
+      ],
       "sources": [
         {
-          "type": "git",
-          "url": "https://gitlab.gnome.org/jwestman/blueprint-compiler.git",
-          "tag": "v0.14.0",
-          "commit": "9c5f9d10a0ba1a2e1b76ac5a41e0e9e9d5f38d79",
-          "x-checker-data": {
-            "type": "git",
-            "tag-pattern": "^v([\\d.]+)$"
-          }
+          "type": "file",
+          "path": "autowire-wrapper.sh"
         }
       ]
     },
     {
-      "name": "autowire",
-      "buildsystem": "meson",
+      "name": "autowire-ui",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -d /app/share/autowire",
+        "install -m 644 window.ui /app/share/autowire/",
+        "install -m 644 profile_dialog.ui /app/share/autowire/",
+        "install -m 644 autowire.gresource /app/share/autowire/"
+      ],
       "sources": [
         {
-          "type": "dir",
-          "path": "."
+          "type": "file",
+          "path": "data/window.ui"
         },
         {
           "type": "file",
-          "path": "data/io.github.nidszxh.Autowire.Daemon.service"
+          "path": "data/profile_dialog.ui"
         },
         {
           "type": "file",
-          "path": "data/io.github.nidszxh.Autowire.service"
+          "path": "data/autowire.gresource"
+        }
+      ]
+    },
+    {
+      "name": "autowire-sources",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -d /app/share/autowire",
+        "install -m 444 main.js /app/share/autowire/",
+        "install -m 444 window.js /app/share/autowire/",
+        "install -m 444 profile_dialog.js /app/share/autowire/",
+        "install -m 444 config_mgr.js /app/share/autowire/",
+        "install -m 444 daemon.js /app/share/autowire/",
+        "install -m 444 daemon_main.js /app/share/autowire/",
+        "install -m 444 wp_monitor.js /app/share/autowire/"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "path": "src/main.js"
+        },
+        {
+          "type": "file",
+          "path": "src/window.js"
+        },
+        {
+          "type": "file",
+          "path": "src/profile_dialog.js"
+        },
+        {
+          "type": "file",
+          "path": "src/config_mgr.js"
+        },
+        {
+          "type": "file",
+          "path": "src/daemon.js"
+        },
+        {
+          "type": "file",
+          "path": "src/daemon_main.js"
+        },
+        {
+          "type": "file",
+          "path": "src/wp_monitor.js"
         }
       ]
     }

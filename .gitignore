@@ -34,3 +34,9 @@ Thumbs.db
 
 # Misc
 ideas/
+
+# Flatpak build artifacts
+data/window.ui
+data/profile_dialog.ui
+data/autowire.gresource
+

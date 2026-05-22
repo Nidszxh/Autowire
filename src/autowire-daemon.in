@@ -5,10 +5,10 @@ import os
 import sys
 
 _launch_dir = os.path.dirname(os.path.abspath(__file__))
-_dev_gresource = os.path.join(_launch_dir, '..', '_build', 'data', 'autowire.gresource')
+_dev_gresource = os.path.join(_launch_dir, '..', 'data', 'autowire.gresource')
 
 if os.path.isfile(_dev_gresource):
-    sys.path.insert(0, os.path.join(_launch_dir, '..'))
+    sys.path.insert(0, os.path.join(_launch_dir, '..', '..'))
 else:
     _pkgdatadir = '@PKGDATADIR@'
 
