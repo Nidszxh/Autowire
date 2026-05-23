@@ -41,15 +41,6 @@ install_data(
 )
 
 install_data(
-  'icons/hicolor/scalable/apps/io.github.nidszxh.Autowire.svg',
-  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
-)
-install_data(
-  'icons/hicolor/symbolic/apps/io.github.nidszxh.Autowire-symbolic.svg',
-  install_dir: datadir / 'icons' / 'hicolor' / 'symbolic' / 'apps',
-)
-
-install_data(
   'io.github.nidszxh.Autowire.Daemon.service',
   install_dir: datadir / 'systemd' / 'user',
 )

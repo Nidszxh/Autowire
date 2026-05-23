@@ -127,7 +127,6 @@ autowire/
 │   └── postinstall.py          # Post-install: icon cache, db, systemd enable
 ├── data/
 │   ├── ui/                     # Blueprint templates (for GResource, not required by GJS)
-│   ├── icons/hicolor/          # App icons (scalable + symbolic + sizes)
 │   ├── io.github.nidszxh.Autowire.gresource.xml
 │   ├── io.github.nidszxh.Autowire.desktop.in
 │   ├── io.github.nidszxh.Autowire.metainfo.xml
