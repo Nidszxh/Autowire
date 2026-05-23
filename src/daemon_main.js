@@ -1,36 +1,33 @@
-const { GLib, Gio } = imports.gi;
+imports.gi.versions.Wp = '0.5';
+const { GLib, Gio, Wp } = imports.gi;
+const GLibUnix = imports.gi.GLibUnix;
+
+const SIGTERM = 15;
+const SIGINT = 2;
+
+Wp.init(Wp.InitFlags.ALL);
 
 print('[Daemon] module loaded');
 
 let _loop = null;
 
-function _watch_config_file() {
+function _watch_config_file(monitor) {
     const config_mgr = imports.config_mgr;
     let mon;
     try {
-        mon = Gio.FileMonitor.new_for_path(config_mgr.CONFIG_FILE);
+        mon = Gio.File.new_for_path(config_mgr.CONFIG_FILE).monitor(Gio.FileMonitorFlags.NONE, null);
     } catch (e) {
         print(`[Daemon] WARNING: could not create config file monitor: ${e}`);
         return;
     }
 
-    mon.connect('changed', (mon, file, other, event) => {
+    mon.connect('changed', (_mon, _file, _other, event) => {
         if (event === Gio.FileMonitorEvent.CHANGES_DONE_HINT || event === Gio.FileMonitorEvent.CREATED) {
             print('[Daemon] profiles.json changed, re-applying routing…');
-            const wp_monitor = imports.wp_monitor;
             const daemon = imports.daemon;
-            const mon2 = daemon.build_monitor();
-            try {
-                mon2.start();
-            } catch (e) {
-                print(`[Daemon] Failed to start temp monitor: ${e}`);
-                return;
+            for (const node of monitor.get_audio_nodes()) {
+                daemon.check_and_route_device(node['name'] || '', monitor);
             }
-            const nodes = mon2.get_audio_nodes();
-            for (const node of nodes) {
-                daemon.check_and_route_device(node['name'] || '', mon2);
-            }
-            mon2.stop();
         }
     });
     mon.set_rate_limit(2000);
@@ -42,13 +39,13 @@ function main() {
 
     _loop = GLib.MainLoop.new(null, false);
 
-    GLib.unix_signal_add(GLib.PRIORITY_HIGH, GLib.UnixSignalInfo.SIGTERM, () => {
+    GLibUnix.signal_add(GLib.PRIORITY_HIGH, SIGTERM, () => {
         print('[Daemon] Received SIGTERM, shutting down…');
         _loop.quit();
         return GLib.SOURCE_REMOVE;
     });
 
-    GLib.unix_signal_add(GLib.PRIORITY_HIGH, GLib.UnixSignalInfo.SIGINT, () => {
+    GLibUnix.signal_add(GLib.PRIORITY_HIGH, SIGINT, () => {
         print('[Daemon] Received SIGINT, shutting down…');
         _loop.quit();
         return GLib.SOURCE_REMOVE;
@@ -56,6 +53,14 @@ function main() {
 
     const daemon = imports.daemon;
     const monitor = daemon.build_monitor();
+
+    monitor.connect('ready', () => {
+        print('[Daemon] Routing already-connected devices…');
+        for (const node of monitor.get_audio_nodes()) {
+            daemon.check_and_route_device(node['name'] || '', monitor);
+        }
+    });
+
     try {
         monitor.start();
     } catch (e) {
@@ -63,13 +68,7 @@ function main() {
         return 1;
     }
 
-    _watch_config_file();
-
-    print('[Daemon] Connected to PipeWire. Routing already-connected devices…');
-    const nodes = monitor.get_audio_nodes();
-    for (const node of nodes) {
-        daemon.check_and_route_device(node['name'] || '', monitor);
-    }
+    _watch_config_file(monitor);
 
     print('[Daemon] Listening for device events…');
 
@@ -82,3 +81,5 @@ function main() {
 
     return 0;
 }
+
+imports.system.exit(main());

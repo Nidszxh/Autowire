@@ -6,6 +6,9 @@ const _BT_NODE_RE = /bluez_(?:output|input)\.([0-9A-Fa-f_]{14,17})\..+/;
 
 const _last_routed = {};
 const _ROUTING_COOLDOWN = 5.0;
+const _CAPTURE_DEBOUNCE_MS = 3000;
+const _capture_timers = {};
+const _active_capture_nodes = new Set();
 
 /**
  * @param {string} node_name
@@ -19,20 +22,98 @@ function _bt_card_name(node_name) {
     return null;
 }
 
-/**
- * @param {string} node_name
- * @returns {boolean}
- */
+function _resolve_node_id(node_name) {
+    let status_text;
+    try {
+        const [ok, stdout] = GLib.spawn_sync(
+            null, ['wpctl', 'status'],
+            null, GLib.SpawnFlags.SEARCH_PATH, null
+        );
+        if (!ok) return null;
+        status_text = new TextDecoder().decode(stdout);
+    } catch (e) {
+        return null;
+    }
+
+    const candidate_ids = [];
+    let in_sinks = false;
+    let in_sources = false;
+    let in_audio = false;
+
+    for (const line of status_text.split('\n')) {
+        const stripped = line.trim();
+        if (stripped === 'Audio') { in_audio = true; continue; }
+        if (!in_audio) continue;
+
+        if (['Sinks:', '├─ Sinks:', '└─ Sinks:'].includes(stripped)) {
+            in_sinks = true; in_sources = false; continue;
+        }
+        if (['Sources:', '├─ Sources:', '└─ Sources:'].includes(stripped)) {
+            in_sources = true; in_sinks = false; continue;
+        }
+        if (['Devices:', '├─ Devices:', '└─ Devices:', 'Filters:', '├─ Filters:', '└─ Filters:',
+             'Streams:', '├─ Streams:', '└─ Streams:'].includes(stripped)) {
+            in_sinks = false; in_sources = false; continue;
+        }
+
+        if (!(in_sinks || in_sources)) continue;
+        if (!line.startsWith(' │')) { in_sinks = false; in_sources = false; continue; }
+
+        const m = line.match(/\s+│\s+(?:\*\s*)?(\d+)\.\s+/);
+        if (m) candidate_ids.push(parseInt(m[1], 10));
+    }
+
+    for (const id of candidate_ids) {
+        try {
+            const [ok, out] = GLib.spawn_sync(
+                null, ['wpctl', 'inspect', String(id)],
+                null, GLib.SpawnFlags.SEARCH_PATH, null
+            );
+            if (!ok) continue;
+            const text = new TextDecoder().decode(out);
+            for (const iline of text.split('\n')) {
+                if (iline.includes('node.name')) {
+                    const m2 = iline.match(/=\s*"(.*)"/);
+                    const val = m2 ? m2[1] : iline.split('=')[1].trim();
+                    if (val === node_name) return id;
+                    break;
+                }
+            }
+        } catch (e) { /* skip */ }
+    }
+    return null;
+}
+
 function set_system_default(node_name) {
     if (!node_name) {
         return false;
     }
+    const node_id = _resolve_node_id(node_name);
+    if (node_id === null) {
+        print(`[Daemon] Could not resolve node ID for: ${node_name}`);
+        return false;
+    }
     try {
-        GLib.subprocess_new_sync(['wpctl', 'set-default', node_name], GLib.SubprocessFlags.NONE);
-        print(`[Daemon] Default set to: ${node_name}`);
-        return true;
+        const [ok, stdout, stderr, exitStatus] = GLib.spawn_sync(
+            null,
+            ['wpctl', 'set-default', String(node_id)],
+            null,
+            GLib.SpawnFlags.SEARCH_PATH,
+            null
+        );
+        if (ok && exitStatus === 0) {
+            print(`[Daemon] Default set to: ${node_name} (id=${node_id})`);
+            return true;
+        }
+        const errMsg = stderr ? new TextDecoder().decode(stderr).trim() : `exit code ${exitStatus}`;
+        print(`[Daemon] wpctl error for ${node_name} (id=${node_id}): ${errMsg}`);
+        return false;
     } catch (e) {
-        print(`[Daemon] wpctl error for ${node_name}: ${e}`);
+        if (e.matches && e.matches(GLib.SpawnError, GLib.SpawnError.NOENT)) {
+            print('[Daemon] ERROR: wpctl not found. Is WirePlumber installed?');
+        } else {
+            print(`[Daemon] wpctl error for ${node_name}: ${e.message || e}`);
+        }
         return false;
     }
 }
@@ -47,14 +128,26 @@ function set_bt_profile(device_global_id, profile_name) {
         return false;
     }
     try {
-        GLib.subprocess_new_sync(
+        const [ok, stdout, stderr, exitStatus] = GLib.spawn_sync(
+            null,
             ['wpctl', 'set-profile', String(device_global_id), profile_name],
-            GLib.SubprocessFlags.NONE
+            null,
+            GLib.SpawnFlags.SEARCH_PATH,
+            null
         );
-        print(`[Daemon] BT profile set: device=${device_global_id} profile=${profile_name}`);
-        return true;
+        if (ok && exitStatus === 0) {
+            print(`[Daemon] BT profile set: device=${device_global_id} profile=${profile_name}`);
+            return true;
+        }
+        const errMsg = stderr ? new TextDecoder().decode(stderr).trim() : `exit code ${exitStatus}`;
+        print(`[Daemon] wpctl set-profile error: ${errMsg}`);
+        return false;
     } catch (e) {
-        print(`[Daemon] wpctl set-profile error: ${e}`);
+        if (e.matches && e.matches(GLib.SpawnError, GLib.SpawnError.NOENT)) {
+            print('[Daemon] ERROR: wpctl not found. Is WirePlumber installed?');
+        } else {
+            print(`[Daemon] wpctl set-profile error: ${e.message || e}`);
+        }
         return false;
     }
 }
@@ -98,7 +191,10 @@ function check_and_route_device(connected_node_name, monitor) {
             set_system_default(source);
         }
 
-        const bt_profile = actions['bt_profile'] || '';
+        let bt_profile = actions['bt_profile'] || '';
+        if (actions['auto_switch'] && _active_capture_nodes.has(connected_node_name)) {
+            bt_profile = actions['bt_profile_call'] || bt_profile;
+        }
         if (bt_profile && monitor) {
             const card_name = _bt_card_name(connected_node_name);
             if (card_name) {
@@ -116,6 +212,67 @@ function check_and_route_device(connected_node_name, monitor) {
     return matched;
 }
 
+function handle_capture_started(node_name, monitor) {
+    if (_capture_timers[node_name]) {
+        GLib.source_remove(_capture_timers[node_name]);
+        delete _capture_timers[node_name];
+    }
+    _active_capture_nodes.add(node_name);
+
+    const config_mgr = imports.config_mgr;
+    const profile = config_mgr.get_active_profile(node_name);
+    if (!profile) return;
+
+    const actions = profile['actions'] || {};
+    if (!actions['auto_switch']) return;
+
+    const call_profile = actions['bt_profile_call'] || '';
+    if (!call_profile) return;
+
+    print(`[Daemon] Capture started on ${node_name}, switching to call profile: ${call_profile}`);
+
+    const card_name = _bt_card_name(node_name);
+    if (card_name) {
+        const global_id = monitor.get_device_global_id(card_name);
+        if (global_id && global_id > 0) {
+            set_bt_profile(global_id, call_profile);
+        }
+    }
+}
+
+function handle_capture_stopped(node_name, monitor) {
+    if (_capture_timers[node_name]) {
+        GLib.source_remove(_capture_timers[node_name]);
+    }
+
+    _capture_timers[node_name] = GLib.timeout_add(GLib.PRIORITY_DEFAULT, _CAPTURE_DEBOUNCE_MS, () => {
+        delete _capture_timers[node_name];
+        _active_capture_nodes.delete(node_name);
+
+        const config_mgr = imports.config_mgr;
+        const profile = config_mgr.get_active_profile(node_name);
+        if (!profile) return GLib.SOURCE_REMOVE;
+
+        const actions = profile['actions'] || {};
+        if (!actions['auto_switch']) return GLib.SOURCE_REMOVE;
+
+        const normal_profile = actions['bt_profile'] || '';
+        if (!normal_profile) return GLib.SOURCE_REMOVE;
+
+        print(`[Daemon] Capture stopped on ${node_name}, restoring profile: ${normal_profile}`);
+
+        const card_name = _bt_card_name(node_name);
+        if (card_name) {
+            const global_id = monitor.get_device_global_id(card_name);
+            if (global_id && global_id > 0) {
+                set_bt_profile(global_id, normal_profile);
+            }
+        }
+
+        return GLib.SOURCE_REMOVE;
+    });
+}
+
 /**
  * @returns {WpMonitor}
  */
@@ -129,6 +286,12 @@ function build_monitor() {
         if (name.startsWith('bluez_card.')) {
             print(`[Daemon] Bluetooth device detected: ${name}`);
         }
+    });
+    monitor.connect('capture-started', (mon, node_name) => {
+        handle_capture_started(node_name, mon);
+    });
+    monitor.connect('capture-stopped', (mon, node_name) => {
+        handle_capture_stopped(node_name, mon);
     });
     return monitor;
 }

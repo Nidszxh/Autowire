@@ -1,8 +1,9 @@
-const { Adw, Gio, GLib, Gtk, GObject } = imports.gi;
+imports.gi.versions.Gtk = '4.0';
+imports.gi.versions.Adw = '1';
+const { Adw, GObject, Gtk } = imports.gi;
 
 print('[Window] module loaded');
 
-const RESOURCE_PATH = '/io/github/nidszxh/Autowire/window.ui';
 const APP_VERSION = '0.1.0';
 
 function _group_by_trigger(profiles) {
@@ -17,15 +18,73 @@ function _group_by_trigger(profiles) {
     return groups;
 }
 
-var AutowireWindow = GObject.registerClass({
-    Template: RESOURCE_PATH,
-    InternalChildren: ['add_button', 'about_button', 'main_stack', 'profiles_page', 'empty_add_button'],
-}, class AutowireWindow extends Adw.ApplicationWindow {
+var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.ApplicationWindow {
     constructor(kwargs) {
         super(kwargs);
         this._profiles_group = null;
+        this._build_ui();
         this._connect_signals();
         this.refresh_profiles();
+    }
+
+    _build_ui() {
+        this.set_default_size(480, 660);
+        this.set_title('Autowire');
+
+        const toolbar_view = new Adw.ToolbarView();
+
+        const header_bar = new Adw.HeaderBar();
+
+        this._add_button = new Gtk.Button({
+            icon_name: 'list-add-symbolic',
+            tooltip_text: 'Add Profile',
+        });
+        this._add_button.add_css_class('suggested-action');
+        header_bar.pack_end(this._add_button);
+
+        this._about_button = new Gtk.Button({
+            icon_name: 'help-about-symbolic',
+            tooltip_text: 'About',
+        });
+        this._about_button.add_css_class('flat');
+        header_bar.pack_start(this._about_button);
+
+        toolbar_view.add_top_bar(header_bar);
+
+        this._main_stack = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 200,
+        });
+
+        const status_page = new Adw.StatusPage({
+            icon_name: 'audio-speakers-symbolic',
+            title: 'No Audio Profiles',
+            description: 'Add a profile to automatically route\naudio when a device connects.',
+        });
+
+        this._empty_add_button = new Gtk.Button({
+            label: 'Add Profile',
+            halign: Gtk.Align.CENTER,
+        });
+        this._empty_add_button.add_css_class('suggested-action');
+        this._empty_add_button.add_css_class('pill');
+        status_page.set_child(this._empty_add_button);
+
+        this._main_stack.add_named(status_page, 'empty');
+
+        this._profiles_page = new Adw.PreferencesPage();
+        this._profiles_page.set_vexpand(true);
+
+        const scrolled = new Gtk.ScrolledWindow({
+            vexpand: true,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+        });
+        scrolled.set_child(this._profiles_page);
+
+        this._main_stack.add_named(scrolled, 'profiles');
+
+        toolbar_view.set_content(this._main_stack);
+        this.set_content(toolbar_view);
     }
 
     _connect_signals() {
@@ -50,11 +109,11 @@ var AutowireWindow = GObject.registerClass({
 
         this._main_stack.set_visible_child_name('profiles');
 
-        const group = Adw.PreferencesGroup.new();
+        const group = new Adw.PreferencesGroup();
         const groups = _group_by_trigger(profiles);
 
         for (const [trigger, triggerProfiles] of Object.entries(groups)) {
-            const triggerGroup = Adw.PreferencesGroup.new();
+            const triggerGroup = new Adw.PreferencesGroup();
             triggerGroup.set_title(`${trigger} (${triggerProfiles.length})`);
             for (const profile of triggerProfiles) {
                 triggerGroup.add(this._build_profile_row(profile, triggerProfiles.length > 1));
@@ -83,43 +142,32 @@ var AutowireWindow = GObject.registerClass({
         }
 
         const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' · ') : trigger;
-        const row = Adw.ActionRow.new();
-        row.set_title(profileName);
-        row.set_subtitle(subtitle);
+        const row = new Adw.ActionRow({ title: profileName, subtitle: subtitle });
 
-        if (profile['is_active']) {
-            const check = Gtk.Image.new_from_icon_name('emblem-ok-symbolic');
-            check.add_css_class('accent-color');
-            row.add_suffix(check);
-        }
+        const sw = new Gtk.Switch({ valign: Gtk.Align.CENTER, active: profile['is_active'] || false });
+        sw.connect('notify::active', () => this._on_switch_toggled(sw, profile));
+        row.add_suffix(sw);
 
-        if (hasSiblings) {
-            const activeIcon = profile['is_active'] ? 'emblem-ok-symbolic' : 'pan-down-symbolic';
-            const toggleBtn = Gtk.Button.new_from_icon_name(activeIcon);
-            toggleBtn.set_tooltip_text('Set as Active');
-            toggleBtn.set_valign(Gtk.Align.CENTER);
-            toggleBtn.add_css_class('flat');
-            const self = this;
-            toggleBtn.connect('clicked', () => self._on_toggle_active_clicked(profile));
-            row.add_suffix(toggleBtn);
-        } else {
-            const editBtn = Gtk.Button.new_from_icon_name('document-edit-symbolic');
-            editBtn.set_tooltip_text('Edit Profile');
-            editBtn.set_valign(Gtk.Align.CENTER);
+        if (!hasSiblings) {
+            const editBtn = new Gtk.Button({
+                icon_name: 'document-edit-symbolic',
+                tooltip_text: 'Edit Profile',
+                valign: Gtk.Align.CENTER,
+            });
             editBtn.add_css_class('flat');
-            const self = this;
-            editBtn.connect('clicked', () => self._on_edit_clicked(profile));
+            editBtn.connect('clicked', () => this._on_edit_clicked(profile));
             row.add_suffix(editBtn);
             row.set_activatable_widget(editBtn);
         }
 
-        const delBtn = Gtk.Button.new_from_icon_name('user-trash-symbolic');
-        delBtn.set_tooltip_text('Delete Profile');
-        delBtn.set_valign(Gtk.Align.CENTER);
+        const delBtn = new Gtk.Button({
+            icon_name: 'user-trash-symbolic',
+            tooltip_text: 'Delete Profile',
+            valign: Gtk.Align.CENTER,
+        });
         delBtn.add_css_class('flat');
         delBtn.add_css_class('destructive-action');
-        const self = this;
-        delBtn.connect('clicked', () => self._on_delete_clicked(profile));
+        delBtn.connect('clicked', () => this._on_delete_clicked(profile));
         row.add_suffix(delBtn);
 
         return row;
@@ -139,6 +187,20 @@ var AutowireWindow = GObject.registerClass({
         dialog.present(this);
     }
 
+    _on_switch_toggled(sw, profile) {
+        const trigger = profile['trigger_device_name'] || '';
+        const profileName = profile['profile_name'] || '';
+        if (!trigger || !profileName) {
+            return;
+        }
+        if (sw.get_active()) {
+            imports.config_mgr.set_active_profile(trigger, profileName);
+        } else {
+            imports.config_mgr.set_active_profile(trigger, '');
+        }
+        this.refresh_profiles();
+    }
+
     _on_delete_clicked(profile) {
         const trigger = profile['trigger_device_name'] || '';
         const profileName = profile['profile_name'] || '';
@@ -146,40 +208,27 @@ var AutowireWindow = GObject.registerClass({
             return;
         }
 
-        const alert = Adw.AlertDialog.new(
-            `Delete Profile "${profileName}"?`,
-            `"${profileName}" will be permanently removed.`
-        );
+        const alert = new Adw.AlertDialog({
+            heading: 'Delete Profile?',
+            body: `"${profileName}" will be permanently removed.`,
+        });
         alert.add_response('cancel', 'Cancel');
         alert.add_response('delete', 'Delete');
         alert.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
         alert.set_default_response('cancel');
         alert.set_close_response('cancel');
 
-        const self = this;
         alert.connect('response', (dialog, response) => {
             if (response === 'delete') {
-                const config_mgr = imports.config_mgr;
-                config_mgr.delete_profile(trigger, profileName);
-                self.refresh_profiles();
+                imports.config_mgr.delete_profile(trigger, profileName);
+                this.refresh_profiles();
             }
         });
         alert.present(this);
     }
 
-    _on_toggle_active_clicked(profile) {
-        const trigger = profile['trigger_device_name'] || '';
-        const profileName = profile['profile_name'] || '';
-        if (!trigger || !profileName) {
-            return;
-        }
-        const config_mgr = imports.config_mgr;
-        config_mgr.set_active_profile(trigger, profileName);
-        this.refresh_profiles();
-    }
-
     _on_about_clicked() {
-        const about = Adw.AboutDialog.new();
+        const about = new Adw.AboutDialog();
         about.set_application_name('Autowire');
         about.set_application_icon('io.github.nidszxh.Autowire');
         about.set_developer_name('nidszxh');
@@ -187,50 +236,7 @@ var AutowireWindow = GObject.registerClass({
         about.set_comments('Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.');
         about.set_website('https://github.com/nidszxh/autowire');
         about.set_support_url('https://github.com/nidszxh/autowire/issues');
-        about.set_license_type(Adw.License.GPL_3_0);
+        about.set_license_type(Gtk.License.GPL_3_0);
         about.present(this);
     }
 });
-
-var AutowireApplication = GObject.registerClass(class AutowireApplication extends Adw.Application {
-    constructor(version) {
-        super({
-            application_id: 'io.github.nidszxh.Autowire',
-            flags: Gio.ApplicationFlags.DEFAULT_FLAGS,
-        });
-        this._version = version;
-    }
-
-    vfunc_activate() {
-        let win = this.get_active_window();
-        if (!win) {
-            win = new AutowireWindow({ application: this });
-        }
-        win.present();
-    }
-});
-
-function main(version, pkgdatadir) {
-    _load_resources(pkgdatadir || '');
-    const app = new AutowireApplication(version);
-    return app.run(['']);
-}
-
-function _load_resources(pkgdatadir) {
-    const candidates = [
-        pkgdatadir ? GLib.build_filenamev([pkgdatadir, 'autowire.gresource']) : null,
-        GLib.build_filenamev([GLib.get_user_data_dir(), '..', 'autowire.gresource']),
-    ].filter(Boolean);
-
-    for (const path of candidates) {
-        try {
-            const resource = Gio.Resource.load(path);
-            resource._register();
-            print(`[App] GResource loaded from: ${path}`);
-            return;
-        } catch (e) {
-            print(`[App] Failed to load GResource at ${path}: ${e}`);
-        }
-    }
-    print('[App] WARNING: autowire.gresource not found. Run `ninja -C _build` first.');
-}

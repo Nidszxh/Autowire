@@ -15,6 +15,7 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 - Runs as a `systemd --user` service — works even when the UI is closed
 - Force high-quality Bluetooth codecs (AAC, LDAC, aptX) instead of mSBC
 - Multiple profiles per device — switch between "Music" and "Call" modes
+- **Auto-switch for calls** — daemon detects active mic streams and drops to HSP/HFP automatically, restoring A2DP when capture ends (3s debounce)
 - Only the **active** profile fires when a device connects, eliminating race conditions
 
 ---
@@ -27,64 +28,44 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 | GTK | 4.0 |
 | Libadwaita | 1.5+ |
 | WirePlumber | 0.5+ |
-| Python | 3.11+ |
-| blueprint-compiler | 0.14+ |
+| GJS | 1.80+ |
+| Python (optional, for tests) | 3.11+ |
 
 ---
 
-## Quick Local Run
+## Quick Local Run (GJS)
 
 ```bash
 # Install system dependencies (Fedora)
-sudo dnf install python3-gobject gtk4 libadwaita wireplumber blueprint-compiler
-
-# Build (required — Blueprint templates won't load without this)
-meson setup _build --prefix=/usr/local -Dprofile=development
-ninja -C _build
+sudo dnf install gjs gtk4 libadwaita wireplumber
 
 # Run the UI
-./_build/src/autowire
+gjs -I src/ src/main.js
+
+# Run the daemon
+gjs -I src/ src/daemon_main.js
 ```
 
-> **Important:** Always run `ninja -C _build` before launching. The `@Gtk.Template` decorators load UI from `autowire.gresource`, which must be compiled by Meson.
+No build step required — the GJS version builds its UI programmatically.
 
 ---
 
 ## Development
 
 ```bash
-# First-time setup
-meson setup _build --prefix=/usr/local -Dprofile=development
-ninja -C _build
-
-# Wipe and rebuild
-rm -rf _build && meson setup _build --prefix=/usr/local -Dprofile=development && ninja -C _build
-
-# Install system-wide (also enables the daemon via postinstall.py)
-sudo ninja -C _build install
-
-# Run tests (60 tests)
+# Tests (Python-only, 60 tests)
 python3 -m pytest tests/ -v
 ```
-
-**Dev profile** (`-Dprofile=development`) appends `.Devel` to the app ID (`io.github.nidszxh.Autowire.Devel`) so it can coexist with a release install.
 
 ---
 
 ## Flatpak
 
 ```bash
-# Install flatpak-builder
-flatpak install flathub org.flatpak.Builder
-
-# Build and install locally
 flatpak-builder --force-clean --user --install _flatpak_build \
     io.github.nidszxh.Autowire.json
+flatpak run io.github.nidszxh.Autowire
 ```
-
-The Flatpak manifest declares two commands:
-- `autowire` — the GTK UI
-- `autowire-daemon` — the headless background service (auto-started via D-Bus session service on login)
 
 ---
 
@@ -120,6 +101,18 @@ The Flatpak manifest declares two commands:
    - `wpctl set-default <source>` — routes microphone to the chosen input
    - `wpctl set-profile <device_id> <bt_codec>` — forces high-quality BT codec (optional)
 
+### Stream-Aware Auto-Switching (for Bluetooth headsets)
+
+When a profile has **Auto-switch for calls** enabled:
+
+1. An app captures the mic (Discord, Zoom, `arecord`, etc.)
+2. `WpMonitor` detects the `input_*` stream from `wpctl status` → emits `capture-started`
+3. Daemon cancels any pending restore, switches to `bt_profile_call` (e.g. `handsfree-headset — mSBC`)
+4. Mic works — HSP/HFP profile is active
+5. App stops capturing → daemon starts 3s debounce (tolerates push-to-talk gaps)
+6. No new capture within 3s → daemon restores `bt_profile` (e.g. AAC, LDAC)
+7. High-quality audio returns
+
 ### Active Profile Rule
 
 Only **one** profile per trigger device can be `is_active: true`. When you save a profile with "Activate on Connect" enabled, all other profiles for that trigger are automatically deactivated. The daemon only fires the active one — no race conditions.
@@ -133,37 +126,39 @@ autowire/
 ├── build-aux/meson/
 │   └── postinstall.py          # Post-install: icon cache, db, systemd enable
 ├── data/
-│   ├── ui/
-│   │   ├── window.blp          # Main window Blueprint template
-│   │   └── profile_dialog.blp  # Profile create/edit dialog template
+│   ├── ui/                     # Blueprint templates (for GResource, not required by GJS)
 │   ├── icons/hicolor/          # App icons (scalable + symbolic + sizes)
 │   ├── io.github.nidszxh.Autowire.gresource.xml
 │   ├── io.github.nidszxh.Autowire.desktop.in
 │   ├── io.github.nidszxh.Autowire.metainfo.xml
-│   ├── io.github.nidszxh.Autowire.Daemon.service    # systemd user service
-│   └── io.github.nidszxh.Autowire.service            # D-Bus session autostart
+│   ├── io.github.nidszxh.Autowire.Daemon.service
+│   └── io.github.nidszxh.Autowire.service
 ├── src/
-│   ├── autowire.in             # UI launcher (Meson template)
-│   ├── autowire-daemon.in      # Daemon launcher (Meson template)
-│   ├── __init__.py
-│   ├── main.py                 # Adw.Application entry point
-│   ├── window.py               # Main window (profile list, grouped by trigger)
-│   ├── profile_dialog.py        # Create/edit dialog (async device loading)
-│   ├── config_mgr.py           # Atomic JSON profile storage
-│   ├── daemon.py              # Routing engine (wpctl calls, is_active check)
-│   ├── daemon_main.py         # Daemon process (GLib.MainLoop, no GTK)
-│   └── wp_monitor.py          # Wp.Core + Wp.ObjectManager wrapper
+│   ├── main.js                 # Adw.Application entry point (GJS — primary)
+│   ├── window.js               # Main window, programmatic UI (GJS)
+│   ├── profile_dialog.js       # Create/edit dialog (GJS)
+│   ├── config_mgr.js           # Atomic JSON profile storage (GJS)
+│   ├── daemon.js               # Routing engine + stream-aware switching (GJS)
+│   ├── daemon_main.js          # Daemon entry point (GJS)
+│   ├── wp_monitor.js           # PW poll-based monitor + capture stream detection (GJS)
+│   ├── main.py                 # Python equivalent (reference/tests only)
+│   ├── window.py
+│   ├── profile_dialog.py
+│   ├── config_mgr.py
+│   ├── daemon.py
+│   ├── daemon_main.py
+│   └── wp_monitor.py
 ├── tests/
 │   ├── conftest.py
-│   ├── test_config_mgr.py     # 20 tests
-│   ├── test_daemon_routing.py # 23 tests
-│   └── test_wp_monitor.py     # 17 tests
+│   ├── test_config_mgr.py
+│   ├── test_daemon_routing.py
+│   └── test_wp_monitor.py
 ├── docs/
-│   └── architecture.md        # Detailed architecture reference
-├── io.github.nidszxh.Autowire.json  # Flatpak manifest
+│   └── architecture.md
+├── io.github.nidszxh.Autowire.json
 ├── meson.build
 ├── meson_options.txt
-└── AGENTS.md                 # Agent instructions (for AI coding assistants)
+└── AGENTS.md
 ```
 
 ---

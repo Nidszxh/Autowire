@@ -2,9 +2,9 @@ const { GLib } = imports.gi;
 
 print('[Config] module loaded');
 
-const _XDG_CONFIG_HOME = GLib.getenv('XDG_CONFIG_HOME') || GLib.build_filenamev([GLib.getenv('HOME') || '', '.config']);
-const CONFIG_DIR = GLib.build_filenamev([_XDG_CONFIG_HOME, 'autowire']);
-const CONFIG_FILE = GLib.build_filenamev([CONFIG_DIR, 'profiles.json']);
+var _XDG_CONFIG_HOME = GLib.getenv('XDG_CONFIG_HOME') || GLib.build_filenamev([GLib.getenv('HOME') || '', '.config']);
+var CONFIG_DIR = GLib.build_filenamev([_XDG_CONFIG_HOME, 'autowire']);
+var CONFIG_FILE = GLib.build_filenamev([CONFIG_DIR, 'profiles.json']);
 
 /** @returns {boolean} */
 function _ensure_config_dir() {
@@ -16,11 +16,18 @@ function _ensure_config_dir() {
     }
 }
 
+function initialize_config() {
+    _ensure_config_dir();
+    if (!GLib.file_test(CONFIG_FILE, GLib.FileTest.EXISTS)) {
+        _write_atomic({ profiles: [] });
+    }
+}
+
 /**
  * @returns {Array} list of profile dicts, or [] on any error
  */
 function load_profiles() {
-    _ensure_config_dir();
+    initialize_config();
 
     if (!GLib.file_test(CONFIG_FILE, GLib.FileTest.EXISTS)) {
         return [];
@@ -114,7 +121,7 @@ function set_active_profile(trigger_device_name, profile_name) {
  * @param {string} bt_profile
  * @param {boolean} is_active
  */
-function save_profile(profile_name, trigger_device, default_sink, default_source, bt_profile = '', is_active = false) {
+function save_profile(profile_name, trigger_device, default_sink, default_source, bt_profile = '', is_active = false, bt_profile_call = '', auto_switch = false) {
     const profiles = load_profiles();
 
     for (let i = 0; i < profiles.length; i++) {
@@ -128,6 +135,8 @@ function save_profile(profile_name, trigger_device, default_sink, default_source
                     default_sink,
                     default_source,
                     bt_profile,
+                    bt_profile_call,
+                    auto_switch,
                 },
             };
             if (is_active) {
@@ -159,6 +168,8 @@ function save_profile(profile_name, trigger_device, default_sink, default_source
             default_sink,
             default_source,
             bt_profile,
+            bt_profile_call,
+            auto_switch,
         },
     });
 
@@ -179,7 +190,7 @@ function delete_profile(trigger_device_name, profile_name) {
     if (filtered.length === profiles.length) {
         return false;
     }
-    _write_atomic({ profiles });
+    _write_atomic({ profiles: filtered });
     print(`[Config] Deleted profile: '${profile_name}' for '${trigger_device_name}'`);
     return true;
 }

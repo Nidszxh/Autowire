@@ -25,36 +25,17 @@
       "buildsystem": "simple",
       "build-commands": [
         "install -d /app/bin",
-        "install -m 755 autowire-wrapper.sh /app/bin/autowire"
+        "install -m 755 autowire-wrapper.sh /app/bin/autowire",
+        "install -m 755 autowire-daemon-wrapper.sh /app/bin/autowire-daemon"
       ],
       "sources": [
         {
           "type": "file",
           "path": "autowire-wrapper.sh"
-        }
-      ]
-    },
-    {
-      "name": "autowire-ui",
-      "buildsystem": "simple",
-      "build-commands": [
-        "install -d /app/share/autowire",
-        "install -m 644 window.ui /app/share/autowire/",
-        "install -m 644 profile_dialog.ui /app/share/autowire/",
-        "install -m 644 autowire.gresource /app/share/autowire/"
-      ],
-      "sources": [
-        {
-          "type": "file",
-          "path": "data/window.ui"
         },
         {
           "type": "file",
-          "path": "data/profile_dialog.ui"
-        },
-        {
-          "type": "file",
-          "path": "data/autowire.gresource"
+          "path": "autowire-daemon-wrapper.sh"
         }
       ]
     },

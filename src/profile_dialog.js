@@ -1,3 +1,5 @@
+imports.gi.versions.Gtk = '4.0';
+imports.gi.versions.Adw = '1';
 const { Adw, GObject, GLib, Gtk } = imports.gi;
 
 print('[ProfileDialog] module loaded');
@@ -38,6 +40,7 @@ var ProfileDialog = GObject.registerClass({
 
     _setup_ui() {
         const content = new Adw.ToolbarView();
+        content.set_size_request(460, 540);
 
         const header_bar = new Adw.HeaderBar({
             title_widget: new Gtk.Label({ label: this._profile ? 'Edit Profile' : 'Add Profile' }),
@@ -116,6 +119,14 @@ var ProfileDialog = GObject.registerClass({
         this._bt_profile_row.set_size_request(-1, 56);
         form_box.append(this._bt_profile_row);
 
+        this._bt_profile_call_row = new Adw.ComboRow({ title: 'Call BT Profile', subtitle: 'Bluetooth profile during calls (HSP/HFP for mic)', visible: true });
+        this._bt_profile_call_row.set_model(Gtk.StringList.new(bt_labels));
+        this._bt_profile_call_row.set_size_request(-1, 56);
+        form_box.append(this._bt_profile_call_row);
+
+        this._auto_switch_row = new Adw.SwitchRow({ title: 'Auto-switch for calls', subtitle: 'Switch to call profile when mic is active', visible: true });
+        form_box.append(this._auto_switch_row);
+
         this._active_row = new Adw.SwitchRow({ title: 'Active', subtitle: 'Enable this profile immediately when triggered', visible: true });
         form_box.append(this._active_row);
 
@@ -125,6 +136,7 @@ var ProfileDialog = GObject.registerClass({
 
         scroll.set_child(main_box);
         content.set_content(scroll);
+        this.set_child(content);
     }
 
     _load_devices_async() {
@@ -172,6 +184,8 @@ var ProfileDialog = GObject.registerClass({
         this._select_by_name(this._sink_row, this._sink_nodes, actions['default_sink'] || '');
         this._select_by_name(this._source_row, this._source_nodes, actions['default_source'] || '');
         this._select_bt_profile(actions['bt_profile'] || '');
+        this._select_bt_profile_call(actions['bt_profile_call'] || '');
+        this._auto_switch_row.set_active(actions['auto_switch'] || false);
         this._active_row.set_active(profile['is_active'] || false);
     }
 
@@ -184,6 +198,12 @@ var ProfileDialog = GObject.registerClass({
     _select_bt_profile(btKey) {
         for (let i = 0; i < BT_PROFILES.length; i++) {
             if (BT_PROFILES[i][0] === btKey) { this._bt_profile_row.set_selected(i); return; }
+        }
+    }
+
+    _select_bt_profile_call(btKey) {
+        for (let i = 0; i < BT_PROFILES.length; i++) {
+            if (BT_PROFILES[i][0] === btKey) { this._bt_profile_call_row.set_selected(i); return; }
         }
     }
 
@@ -205,9 +225,12 @@ var ProfileDialog = GObject.registerClass({
         const sinkNode = sinkIdx !== _INVALID && this._sink_nodes[sinkIdx] ? this._sink_nodes[sinkIdx]['name'] : '';
         const sourceNode = sourceIdx !== _INVALID && this._source_nodes[sourceIdx] ? this._source_nodes[sourceIdx]['name'] : '';
         const btProfileKey = btIdx !== _INVALID && BT_PROFILES[btIdx] ? BT_PROFILES[btIdx][0] : '';
+        const btCallIdx = this._bt_profile_call_row.get_selected();
+        const btProfileCallKey = btCallIdx !== _INVALID && BT_PROFILES[btCallIdx] ? BT_PROFILES[btCallIdx][0] : '';
+        const autoSwitch = this._auto_switch_row.get_active();
         const isActive = this._active_row.get_active();
 
-        imports.config_mgr.save_profile(name, triggerNode, sinkNode, sourceNode, btProfileKey, isActive);
+        imports.config_mgr.save_profile(name, triggerNode, sinkNode, sourceNode, btProfileKey, isActive, btProfileCallKey, autoSwitch);
         this.emit('profile-saved');
         this.close();
     }

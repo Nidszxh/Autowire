@@ -45,6 +45,8 @@
     <color type="primary" scheme_preference="dark">#1A5276</color>
   </branding>
 
+  <!--
+  TODO: Add 16:9 screenshots before Flathub submission
   <screenshots>
     <screenshot type="default">
       <caption>The main profile list showing configured audio profiles</caption>
@@ -55,6 +57,7 @@
       <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/new-profile.png</image>
     </screenshot>
   </screenshots>
+  -->
 
   <releases>
     <release version="0.1.0" date="2026-05-17">
