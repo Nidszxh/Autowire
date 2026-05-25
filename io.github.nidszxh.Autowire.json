@@ -54,32 +54,8 @@
       ],
       "sources": [
         {
-          "type": "file",
-          "path": "src/main.js"
-        },
-        {
-          "type": "file",
-          "path": "src/window.js"
-        },
-        {
-          "type": "file",
-          "path": "src/profile_dialog.js"
-        },
-        {
-          "type": "file",
-          "path": "src/config_mgr.js"
-        },
-        {
-          "type": "file",
-          "path": "src/daemon.js"
-        },
-        {
-          "type": "file",
-          "path": "src/daemon_main.js"
-        },
-        {
-          "type": "file",
-          "path": "src/wp_monitor.js"
+          "type": "dir",
+          "path": "src"
         }
       ]
     }

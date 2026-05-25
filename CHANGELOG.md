@@ -5,7 +5,7 @@ All notable changes to Autowire are documented here.
 ## [Unreleased]
 
 ### GJS Migration (primary runtime)
-- **GJS-first** — all source files ported from Python to GJS. Python files kept as reference only.
+- **GJS-first** — all source files ported from Python to GJS. Stale Python files and tests removed.
 - **Poll-based WpMonitor** — replaces Wp.ObjectManager (GJS bindings can't read proxy properties). Uses `wpctl status` + `wpctl inspect` in 3s poll cycle.
 - **Programmatic UI** — no Blueprint/GResource templates needed. All widgets built in code.
 - **Daemon reworked** — `GLibUnix.signal_add` for signal handling, `Gio.File.monitor` for config watching, numeric node ID resolution for wpctl.

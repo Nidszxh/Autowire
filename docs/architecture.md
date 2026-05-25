@@ -13,7 +13,7 @@ Autowire is two separate processes that communicate only through a shared JSON f
 | **UI** | `gjs -I src/ src/main.js` | GTK 4, Adwaita, WirePlumber |
 | **Daemon** | `gjs -I src/ src/daemon_main.js` | GLib only (no GTK, no Adw) |
 
-The GJS versions are the primary implementation. Python equivalents exist for reference and test infrastructure. No Meson build step required for GJS — the UI builds its widgets programmatically.
+No build step required — the UI builds its widgets programmatically.
 
 ---
 
@@ -74,8 +74,7 @@ Daemon entry point (GLib only, zero GTK imports).
 ### `main.js`
 GTK UI entry point.
 
-- `_load_resources()` — registers the compiled GResource bundle from one of three paths (installed, `_build/`, or alongside source)
-- `AutowireApplication` — `Adw.Application` subclass; `do_activate()` shows or creates `AutowireWindow`
+- `AutowireApplication` — `Adw.Application` subclass; `vfunc_activate()` shows or creates `AutowireWindow`
 
 ### `window.js`
 `AutowireWindow` — shows the profile list from `profiles.json`, grouped by trigger device.
@@ -102,9 +101,8 @@ GTK UI entry point.
 
 ```
 User opens ProfileDialog
-    └─► _load_devices_async() spawns threading.Thread
-            └─► get_audio_nodes_sync() via wpctl
-                    └─► results → GLib.idle_add → _on_devices_loaded()
+    └─► GLib.idle_add → get_audio_nodes_sync() via wpctl
+            └─► results → _on_devices_loaded()
                             └─► ComboRow models set
                                     └─► GLib.idle_add → _on_devices_loaded_idle()
                                             └─► _validate() + _prefill()
@@ -177,12 +175,12 @@ Daemon startup
 
 | Finish arg | Purpose |
 |---|---|
-| `--socket=pipewire-0` | PipeWire portal — lets the app talk to the audio server |
-| `--talk-name=org.freedesktop.WirePlumber` | Direct WirePlumber D-Bus access |
-| `--filesystem=/usr/bin/wpctl:ro` | `wpctl` command for device enumeration |
+| `--share=ipc` | Shared memory for X11/Wayland |
 | `--socket=wayland` | GTK display |
 | `--socket=fallback-x11` | X11 fallback |
-| `--system-talk-name=org.freedesktop.login1` | Power management (suspend/resume) |
+| `--socket=pulseaudio` | Audio access via PulseAudio/PipeWire |
+| `--talk-name=org.freedesktop.WirePlumber` | Direct WirePlumber D-Bus access |
+| `--share=network` | D-Bus session bus access |
 
 ---
 

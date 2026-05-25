@@ -4,8 +4,7 @@ project('autowire',
   default_options: ['warning_level=2'],
 )
 
-python = import('python').find_installation('python3')
-gnome = import('gnome')
+gjs = find_program('gjs')
 
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
@@ -23,7 +22,7 @@ conf = configuration_data()
 conf.set('APPLICATION_ID', application_id)
 conf.set('PKGDATADIR', pkgdatadir)
 conf.set('VERSION', meson.project_version())
-conf.set('PYTHON', python.full_path())
+conf.set('GJS', gjs.full_path())
 
 subdir('data')
 subdir('src')

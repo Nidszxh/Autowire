@@ -1,30 +1,3 @@
-ui_files = [
-  custom_target(
-    'window_ui',
-    output: 'window.ui',
-    command: ['cp', '@INPUT@', '@OUTPUT@'],
-    input: files('window.ui'),
-    install: false,
-    build_by_default: false,
-  ),
-  custom_target(
-    'profile_dialog_ui',
-    output: 'profile_dialog.ui',
-    command: ['cp', '@INPUT@', '@OUTPUT@'],
-    input: files('profile_dialog.ui'),
-    install: false,
-    build_by_default: false,
-  ),
-]
-
-gnome.compile_resources(
-  'autowire',
-  'io.github.nidszxh.Autowire.gresource.xml',
-  gresource_bundle: true,
-  install: true,
-  install_dir: pkgdatadir,
-)
-
 desktop_file = configure_file(
   input: 'io.github.nidszxh.Autowire.desktop.in',
   output: 'io.github.nidszxh.Autowire.desktop',

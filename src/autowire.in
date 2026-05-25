@@ -1,25 +1,9 @@
-#!@PYTHON@
-"""Autowire — GTK4 UI launcher."""
-
-import os
-import sys
-
-_launch_dir = os.path.dirname(os.path.abspath(__file__))
-_dev_gresource = os.path.join(_launch_dir, '..', 'data', 'autowire.gresource')
-
-if os.path.isfile(_dev_gresource):
-    _pkgdatadir = os.path.join(_launch_dir, '..', 'data')
-    sys.path.insert(0, os.path.join(_launch_dir, '..', '..'))
-else:
-    _pkgdatadir = '@PKGDATADIR@'
-
-import gi
-gi.require_version('Wp', '0.5')
-gi.require_version('Gtk', '4.0')
-gi.require_version('Adw', '1')
-
-from gi.repository import Wp
-Wp.init(Wp.InitFlags.ALL)
-
-from src.main import main
-sys.exit(main('@VERSION@', _pkgdatadir))
+#!/bin/bash
+_launch_dir="$(dirname "$(readlink -f "$0")")"
+_src_dir="$_launch_dir/../../src"
+_main_js="$_src_dir/main.js"
+if [ -f "$_main_js" ]; then
+    exec @GJS@ -I "$_src_dir" "$_main_js" "$@"
+else
+    exec @GJS@ -I @PKGDATADIR@ @PKGDATADIR@/main.js "$@"
+fi

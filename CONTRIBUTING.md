@@ -6,50 +6,27 @@
 # Install dependencies (Fedora)
 sudo dnf install gjs gtk4 libadwaita wireplumber meson ninja-build
 
-# Run the GJS UI (no build required)
+# Run the UI (no build required)
 gjs -I src/ src/main.js
 
 # Run the daemon
 gjs -I src/ src/daemon_main.js
 ```
 
-### Python (for running tests)
-
-```bash
-sudo dnf install python3-gobject
-python3 -m pytest tests/ -v
-```
-
-## Testing
-
-```bash
-# All tests (60 total)
-python3 -m pytest tests/ -v
-
-# Single file
-python3 -m pytest tests/test_daemon_routing.py -v
-
-# Single test class
-python3 -m pytest tests/test_daemon_routing.py::CheckAndRouteDeviceTestCase -v
-```
-
-Tests are hardware-free — all WirePlumber/PipeWire calls are mocked with `@patch`.
-
 ## Project Layout
 
 ```
 src/
-  main.js                           # UI entry (GTK/Adwaita — GJS primary)
-  window.js                         # Profile list window (grouped by trigger)
-  profile_dialog.js                 # Create/edit dialog
-  config_mgr.js                     # profiles.json persistence + is_active + auto_switch logic
-  daemon.js                         # Routing engine + stream-aware capture switching
-  daemon_main.js                    # Daemon process (GLib only, no GTK)
-  wp_monitor.js                     # Poll-based WpCore wrapper + capture stream detection
-  *.py                              # Python equivalents (reference/test infra only)
+  main.js                         # UI entry (GTK/Adwaita)
+  window.js                       # Profile list window (grouped by trigger)
+  profile_dialog.js               # Create/edit dialog
+  config_mgr.js                   # profiles.json persistence
+  daemon.js                       # Routing engine + stream-aware switching
+  daemon_main.js                  # Daemon process (GLib only, no GTK)
+  wp_monitor.js                   # Poll-based WpCore + capture detection
 ```
 
-The project is implemented in **GJS** (primary, builds UI programmatically). Python files are kept for reference and test infrastructure.
+All code is pure GJS (no Python).
 
 ## Architecture Notes
 
@@ -83,7 +60,6 @@ If a new capture starts during debounce, the timer is cancelled. This handles pu
 
 - No comments unless required by AGENTS.md
 - Follow existing import ordering
-- Test new code with `python3 -m pytest` before committing
 
 ## Debugging
 

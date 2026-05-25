@@ -157,6 +157,39 @@ function set_bt_profile(device_global_id, profile_name) {
  * @param {WpMonitor|null} monitor
  * @returns {boolean}
  */
+function _bt_card_equal(a, b) {
+    if (!a || !b) return false;
+    const ca = _bt_card_name(a);
+    const cb = _bt_card_name(b);
+    if (!ca || !cb) return false;
+    return ca === cb;
+}
+
+function _any_active_capture_for(node_name) {
+    if (_active_capture_nodes.has(node_name)) return true;
+    for (const captured of _active_capture_nodes) {
+        if (_bt_card_equal(captured, node_name)) return true;
+    }
+    return false;
+}
+
+function _get_active_profile_for(node_name) {
+    const config_mgr = imports.config_mgr;
+    let profile = config_mgr.get_active_profile(node_name);
+    if (profile) return profile;
+
+    const card = _bt_card_name(node_name);
+    if (!card) return null;
+
+    const profiles = config_mgr.load_profiles();
+    for (const p of profiles) {
+        if (p['is_active'] && _bt_card_name(p['trigger_device_name']) === card) {
+            return p;
+        }
+    }
+    return null;
+}
+
 function check_and_route_device(connected_node_name, monitor) {
     const now = GLib.get_monotonic_time() / 1000000;
     const last = _last_routed[connected_node_name] || 0;
@@ -183,18 +216,42 @@ function check_and_route_device(connected_node_name, monitor) {
 
         const sink = actions['default_sink'] || '';
         const source = actions['default_source'] || '';
+        let bt_profile = actions['bt_profile'] || '';
+        if (actions['auto_switch'] && _any_active_capture_for(connected_node_name)) {
+            bt_profile = actions['bt_profile_call'] || bt_profile;
+        }
 
         if (sink) {
             set_system_default(sink);
+        } else if (bt_profile && monitor) {
+            const bt_card = _bt_card_name(connected_node_name);
+            if (bt_card) {
+                for (const node of monitor.get_audio_nodes()) {
+                    if (node['media_class'] === 'Audio/Sink'
+                        && _bt_card_name(node['name']) === bt_card) {
+                        print(`[Daemon] Auto-routing BT output: ${node['name']}`);
+                        set_system_default(node['name']);
+                        break;
+                    }
+                }
+            }
         }
         if (source) {
             set_system_default(source);
+        } else if (bt_profile && monitor) {
+            const bt_card = _bt_card_name(connected_node_name);
+            if (bt_card) {
+                for (const node of monitor.get_audio_nodes()) {
+                    if (node['media_class'] === 'Audio/Source'
+                        && _bt_card_name(node['name']) === bt_card) {
+                        print(`[Daemon] Auto-routing BT input: ${node['name']}`);
+                        set_system_default(node['name']);
+                        break;
+                    }
+                }
+            }
         }
 
-        let bt_profile = actions['bt_profile'] || '';
-        if (actions['auto_switch'] && _active_capture_nodes.has(connected_node_name)) {
-            bt_profile = actions['bt_profile_call'] || bt_profile;
-        }
         if (bt_profile && monitor) {
             const card_name = _bt_card_name(connected_node_name);
             if (card_name) {
@@ -219,9 +276,11 @@ function handle_capture_started(node_name, monitor) {
     }
     _active_capture_nodes.add(node_name);
 
-    const config_mgr = imports.config_mgr;
-    const profile = config_mgr.get_active_profile(node_name);
-    if (!profile) return;
+    const profile = _get_active_profile_for(node_name);
+    if (!profile) {
+        print(`[Daemon] Capture started on ${node_name}, but no matching profile found.`);
+        return;
+    }
 
     const actions = profile['actions'] || {};
     if (!actions['auto_switch']) return;
@@ -237,6 +296,14 @@ function handle_capture_started(node_name, monitor) {
         if (global_id && global_id > 0) {
             set_bt_profile(global_id, call_profile);
         }
+
+        for (const node of monitor.get_audio_nodes()) {
+            if (node['media_class'] === 'Audio/Source'
+                && _bt_card_name(node['name']) === card_name) {
+                set_system_default(node['name']);
+                break;
+            }
+        }
     }
 }
 
@@ -249,8 +316,7 @@ function handle_capture_stopped(node_name, monitor) {
         delete _capture_timers[node_name];
         _active_capture_nodes.delete(node_name);
 
-        const config_mgr = imports.config_mgr;
-        const profile = config_mgr.get_active_profile(node_name);
+        const profile = _get_active_profile_for(node_name);
         if (!profile) return GLib.SOURCE_REMOVE;
 
         const actions = profile['actions'] || {};
@@ -266,6 +332,14 @@ function handle_capture_stopped(node_name, monitor) {
             const global_id = monitor.get_device_global_id(card_name);
             if (global_id && global_id > 0) {
                 set_bt_profile(global_id, normal_profile);
+            }
+
+            for (const node of monitor.get_audio_nodes()) {
+                if (node['media_class'] === 'Audio/Sink'
+                    && _bt_card_name(node['name']) === card_name) {
+                    set_system_default(node['name']);
+                    break;
+                }
             }
         }
 

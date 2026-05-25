@@ -1,175 +1,157 @@
 # Autowire — Agent Instructions
 
-## Project Overview
+## One-Sentence
 
-Libadwaita-native GTK4 application for automated PipeWire/WirePlumber audio profile switching. Two independent processes (UI + daemon) share only `~/.config/autowire/profiles.json`. Python with Meson + Blueprint build.
+Libadwaita/GTK4 app + headless daemon for automated PipeWire/WirePlumber audio profile switching when devices connect.
 
-## Build & Run
-
-```bash
-# First-time setup (required before running anything)
-meson setup _build --prefix=/usr/local -Dprofile=development
-ninja -C _build
-
-# Wipe and rebuild
-rm -rf _build && meson setup _build --prefix=/usr/local -Dprofile=development && ninja -C _build
-
-# Run the UI
-./_build/src/autowire
-
-# Install system-wide (postinstall: icon cache + desktop db + systemd enable)
-sudo ninja -C _build install
-
-# Dev profile appends .Devel to app ID: io.github.nidszxh.Autowire.Devel
-```
-
-**Blueprint→UI→GResource is mandatory.** Without `ninja -C _build`, `@Gtk.Template` decorators crash. `_load_resources()` searches `pkgdatadir` → `_build/data/` → `src/` for `autowire.gresource`.
-
-## Architecture
+## Architecture (Two Processes, One JSON)
 
 ```
-src/
-  autowire.in / autowire-daemon.in  # Meson launcher templates (auto-detect _build/ for dev)
-  main.py                           # Adw.Application entry (GTK/Adwaita)
-  window.py                         # Profile list UI, grouped by trigger
-  profile_dialog.py                 # Create/edit dialog (async device loading via threading)
-  daemon.py                         # Routing engine: wpctl set-default / set-profile
-  daemon_main.py                    # Pure-GLib daemon entry (no GTK imports)
-  wp_monitor.py                     # WpCore + WpObjectManager wrapper (WpNode + WpDevice)
-  config_mgr.py                     # Atomic JSON persistence at ~/.config/autowire/profiles.json
-  main.js / daemon_main.js / ...    # Side-by-side GJS port (incomplete, installed but not primary)
+┌──────────────────────────────────────────────────────────┐
+│  UI  (src/main.js — GJS, GTK4 + Adwaita + Wp)           │
+│  gjs -I src/ src/main.js                                 │
+│  Builds: AutowireWindow, ProfileDialog                   │
+│  Reads/writes: ~/.config/autowire/profiles.json          │
+└──────────────────────┬───────────────────────────────────┘
+                       │ profiles.json
+                       v
+┌──────────────────────────────────────────────────────────┐
+│  Daemon (src/daemon_main.js — GJS, GLib only, no GTK)    │
+│  gjs -I src/ src/daemon_main.js                           │
+│  Polls wpctl every 3s; routes audio on node-inserted     │
+│  Monitors profiles.json via Gio.FileMonitor               │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Two entry points:**
-- **UI** (`autowire`): `src/main.py` → `main()` — requires GTK/Adwaita/Wp imports
-- **Daemon** (`autowire-daemon`): `src/daemon_main.py` → `main()` — GLib only (no GTK, no Adw)
+## File Map
 
-Both launchers call `gi.require_version('Wp', '0.5')` then `Wp.init(Wp.InitFlags.ALL)` *before* any other Wp usage.
+```
+src/                    # Production GJS
+  main.js               # Adw.Application entry (GTK/Adw/Wp)
+  window.js             # Profile list UI, grouped by trigger
+  profile_dialog.js     # Create/edit Adw.Dialog
+  daemon.js             # Routing engine + capture-aware BT switching
+  daemon_main.js        # Daemon main loop (GLib + Gio + Wp, zero GTK)
+  wp_monitor.js         # Poll-based WpCore wrapper + capture detection
+  config_mgr.js         # Atomic JSON CRUD for profiles.json
+data/                   # System integration files
+  *.service, *.desktop.in, *.metainfo.xml
+```
+
+## Daemon Flowgraph
+
+```
+daemon_main.js:main()
+  Wp.init(Wp.InitFlags.ALL)
+  │
+  ├─► daemon.build_monitor() → new WpMonitor()
+  │     ├─ node-added → check_and_route_device(name, mon)
+  │     ├─ device-added → log if bluez_card.*
+  │     ├─ capture-started → handle_capture_started(name, mon)
+  │     └─ capture-stopped → handle_capture_stopped(name, mon)
+  │
+  ├─► monitor.start()
+  │     └─ _core.connect() → _on_core_connected()
+  │           └─ _poll() every 3s
+  │                 ├─ _poll_nodes()   — wpctl status + inspect
+  │                 ├─ _poll_devices() — Devices section
+  │                 └─ _poll_streams() — Streams → capture detection
+  │                       └─ 0→1: emit 'capture-started'
+  │                       └─ 1→0: emit 'capture-stopped'
+  │
+  ├─► on 'ready' → route already-connected nodes
+  │
+  ├─► Gio.File.new_for_path(CONFIG_FILE).monitor()
+  │     └─ on change → re-route all tracked nodes
+  │
+  └─► GLib.MainLoop.run()
+
+check_and_route_device(node_name, monitor?)
+  5s cooldown (_last_routed per node_name)
+  load_profiles() → first match: trigger==name AND is_active
+  set_system_default(sink) / set_system_default(source)
+    └─ _resolve_node_id(name): wpctl status → candidates → wpctl inspect to find node.name → numeric ID
+    └─ wpctl set-default <numeric_id>
+  if bt_profile:
+    _bt_card_name(node) → bluez_card.XX (MAC preserved)
+    monitor.get_device_global_id(card) → numeric PW global ID
+    wpctl set-profile <global_id> <profile>
+  if auto_switch + _active_capture_nodes.has(name):
+    use bt_profile_call instead of bt_profile
+```
+
+## Capture-Aware BT Switching Flow
+
+```
+App opens mic → input_* stream appears in wpctl status Streams
+  │
+  ▼
+WpMonitor._poll_streams() parses stream
+  └─ _capture_counts[name] goes 0→1 → emit 'capture-started'
+       │
+       ▼
+handle_capture_started(name, mon)
+  cancel pending restore timer (_capture_timers)
+  _active_capture_nodes.add(name)
+  get_active_profile(name) → if auto_switch:
+    wpctl set-profile <id> <bt_profile_call> (e.g. handsfree-headset)
+       │
+App stops mic → stream disappears
+  │
+  ▼
+_capture_counts[name] goes 1→0 → emit 'capture-stopped'
+  │
+  ▼
+handle_capture_stopped(name, mon)
+  GLib.timeout_add(3000ms) — debounce for push-to-talk gaps
+    └─ if no new capture-started in 3s:
+         _active_capture_nodes.delete(name)
+         wpctl set-profile <id> <bt_profile> (e.g. a2dp-sink-aac)
+```
 
 ## Key Commands
 
 ```bash
-# All tests (60 total: 19 config_mgr + 23 daemon + 18 wp_monitor)
-python3 -m pytest tests/ -v
+# Run UI (no build needed)
+gjs -I src/ src/main.js
 
-# Single file or class
-python3 -m pytest tests/test_daemon_routing.py::CheckAndRouteDeviceTestCase -v
+# Run daemon
+gjs -I src/ src/daemon_main.js
 
-# Run the app (must rebuild first)
+# System install via Meson (launches GJS)
 ninja -C _build && ./_build/src/autowire
 
 # Daemon logs
 journalctl --user -u io.github.nidszxh.Autowire.Daemon -f
-
-# Restart daemon after config change
 systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 ```
-
-## GResource
-
-Registers `window.ui` and `profile_dialog.ui` under `/io/github/nidszxh/Autowire/` in `data/io.github.nidszxh.Autowire.gresource.xml`. Build output lands at `_build/data/autowire.gresource`. The `.ui` files in `data/` are generated from `data/ui/*.blp` and `.gitignore`d.
 
 ## Profile Data Model (`~/.config/autowire/profiles.json`)
 
 ```json
-{"profiles": [{"profile_name": "AAC High Quality", "trigger_device_name": "bluez_output.XX_...", "is_active": true, "actions": {"default_sink": "...", "default_source": "...", "bt_profile": "a2dp-sink-aac"}}]}
+{"profiles": [{"profile_name": "AAC High Quality", "trigger_device_name": "bluez_output.XX_...", "is_active": true, "actions": {"default_sink": "...", "default_source": "...", "bt_profile": "a2dp-sink-aac", "bt_profile_call": "handsfree-headset", "auto_switch": true}}]}
 ```
 
-- Uniqueness: `(trigger_device_name, profile_name)`. Multiple profiles per trigger allowed.
-- `is_active`: only one per trigger can be `true`. `save_profile(is_active=True)` auto-deactivates siblings.
-- `bt_profile` valid values: `a2dp-sink-aac`, `a2dp-sink-ldac`, `a2dp-sink-aptx`, `a2dp-sink-aptx_hd`, `a2dp-sink-sbc_xq`, `a2dp-sink-sbc`, `handsfree-headset`, or `''` (don't change).
-- Atomic writes: `tempfile.mkstemp()` → `os.replace()` — crash-safe.
-- `load_profiles()` migrates old entries (adds `is_active: false`), returns `[]` on error.
+- Uniqueness: `(trigger_device_name, profile_name)`.
+- `is_active`: only one per trigger can be true.
+- Valid `bt_profile` values: `a2dp-sink-aac`, `a2dp-sink-ldac`, `a2dp-sink-aptx`, `a2dp-sink-aptx_hd`, `a2dp-sink-sbc_xq`, `a2dp-sink-sbc`, `handsfree-headset`, or `''`.
 
-**`config_mgr.py` API:**
-- `initialize_config()` — creates dir + empty file if absent
-- `load_profiles()` → `list[dict]`
-- `get_profile(trigger, name)` → `dict | None`
-- `get_profiles_for_trigger(trigger)` → `list[dict]`
-- `get_active_profile(trigger)` → `dict | None`
-- `set_active_profile(trigger, name)` — deactivates all others for that trigger
-- `save_profile(name, trigger, sink, source, bt_profile='', is_active=False)` — upserts by `(trigger, name)`
-- `delete_profile(trigger, name)` → `bool`
+## GJS Quirks
 
-## Daemon Flow
+- **Poll-based WpMonitor** — GJS Wp bindings can't read proxy properties. Uses `wpctl status` + `wpctl inspect` every 3s instead of `Wp.ObjectManager`.
+- **`Adw.PreferencesGroup` title via constructor broken** — always use `set_title()` after construction.
+- **`Adw.AlertDialog` needs object constructor** — `new Adw.AlertDialog({heading, body})`.
+- **`GLibUnix.signal_add()`** (not deprecated `GLib.unix_signal_add`) for SIGTERM/SIGINT.
+- **`Wp.Properties()` constructor raises boxed-type error** — use `Wp.Properties.new_empty()`.
+- **Numeric ID resolution** — `wpctl set-default` needs numeric PW node ID. `_resolve_node_id()` parses `wpctl status` for candidate IDs, `wpctl inspect`s each to match `node.name`.
+- **Device global ID** — `wpctl set-profile` needs PW global ID. Use `monitor.get_device_global_id('bluez_card.XX_XX_...')`.
+- **BT node→card mapping** — `bluez_output.XX_XX_...` → `bluez_card.XX_XX_...` (MAC preserved).
+- **Atomic writes** — `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.rename()`.
+- **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 2000ms rate limit.
+- **Polling:** 3s interval, 5s routing cooldown (per node name), 3s capture debounce.
 
-```
-daemon_main.py:main()
-  └─► build_monitor() → WpMonitor.start() → _core.connect()
-        └─► _on_core_connected() ── install WpObjectManager (WpNode + WpDevice)
-              └─► _on_om_installed() → emit 'ready'
-  └─► _watch_config_file() → GLib.FileMonitor on profiles.json
-        └─► on change → re-route all active nodes via check_and_route_device()
-  └─► On 'ready' signal → check_and_route_device() for already-connected nodes
+## Known Issues
 
-WpMonitor._on_node_added()
-  └─► daemon._on_node_added() → check_and_route_device(name, monitor)
-        ├► 5s cooldown (_last_routed per node)
-        ├► load_profiles() → first where trigger == name AND is_active == True
-        ├► set_system_default(sink) / set_system_default(source)
-        └► if bt_profile: _bt_card_name(node) → monitor.get_device_global_id(card) → set_bt_profile(id, profile)
-```
-
-- `_bt_card_name(node_name)`: `bluez_output.XX_XX_...` → `bluez_card.XX_XX_...`
-- `wpctl set-default <node_name>` — accepts node name string
-- `wpctl set-profile <device_global_id> <profile_name>` — **requires numeric PW global ID** (not a name)
-
-## WpMonitor Signals
-
-- `node-added(name, description, media_class)` — filtered by `media.class` in `{'Audio/Sink', 'Audio/Source', 'Audio/Duplex'}`
-- `node-removed(name)`
-- `device-added(name, description, global_id)` — all devices (no filter)
-- `device-removed(name)`
-- `ready()` — monitor fully connected and populated
-
-## Window UI
-
-- `main_stack` with `empty` (StatusPage + "Add Profile") and `profiles` pages
-- Profiles grouped by `trigger_device_name` via `_group_by_trigger()`; each trigger gets `Adw.PreferencesGroup` with title set by `set_title()`
-- `_build_profile_row()` creates `Adw.ActionRow` per profile:
-  - Active profile: `emblem-ok-symbolic` in accent color
-  - Has siblings: toggle button (`emblem-ok-symbolic` / `pan-down-symbolic`)
-  - No siblings: edit button
-  - Delete button (all rows) → `Adw.AlertDialog` with destructive response
-
-## ProfileDialog
-
-- `Adw.Dialog` with `content_stack` (loading spinner → form)
-- Device lists loaded via `threading.Thread(daemon=True)` → `get_audio_nodes_sync()` (uses `wpctl status` + `wpctl inspect`)
-- Three `Adw.ComboRow` widgets for trigger/sink/source, populated with `Gtk.StringList` from descriptions
-- `_on_devices_loaded()` schedules `_on_devices_loaded_idle()` via `GLib.idle_add` so combo model propagation completes before `notify::selected` fires
-- Save enabled when name non-empty AND trigger selected (`!= Gtk.INVALID_LIST_POSITION`)
-
-## Wp 0.5 API Quirks
-
-- `Proxy.get_properties()` may raise `TypeError`. Use `_proxy_properties(proxy)` which falls back to `proxy.props.properties`. `_get_properties` is a module-level alias.
-- `get_audio_nodes_sync()` uses `wpctl` subprocess (not GLib MainLoop). Returns in ~0.2s. If callback passed, fires via `GLib.idle_add`.
-- `Wp.Properties()` constructor raises boxed-type error. Use `new_empty()`, `new_string(str)`, or `new_copy()`.
-
-## Testing
-
-- `tests/conftest.py` adds project root to `sys.path` so `from src import config_mgr, daemon` works
-- Config tests: `setUp()` overrides `config_mgr.CONFIG_DIR`/`CONFIG_FILE` to `tempfile.mkdtemp()`
-- Daemon tests: `@patch('src.daemon.subprocess.run')` to mock `wpctl`
-- `CheckAndRouteDeviceTestCase.setUp()` clears `daemon._last_routed` to prevent cross-test leakage
-- No CI, no pre-commit, no typechecking, no pyproject.toml — pytest is the only quality gate
-
-## Important Constraints
-
-- **Daemon has zero GTK imports** — `daemon_main.py` imports only `GLib`, `Gio`, `signal`, `config_mgr`, `daemon`
-- **`Adw.PreferencesGroup` title via constructor is broken in GTK4** — always use `set_title()` after construction
-- `Wp.init(Wp.InitFlags.ALL)` + `gi.require_version('Wp', '0.5')` must precede all Wp usage — done in launcher scripts
-- Flatpak runtime version: `org.gnome.Platform//50` (per `io.github.nidszxh.Autowire.json`)
-
-## Debugging
-
-```bash
-# Quick routing debug: check profiles on disk
-cat ~/.config/autowire/profiles.json
-
-# Inspect PipeWire nodes
-wpctl status
-wpctl inspect <node_id>
-
-# Trigger re-route by saving any profile in the UI (config file watcher re-applies)
-```
+- **No GJS test suite** — all 60 Python tests were removed with the stale Python code.
+- **`get_audio_nodes_sync()` blocks UI ~0.2s** — uses `GLib.idle_add` + sync subprocess.
+- **No subprocess timeout** — GJS `GLib.spawn_sync` doesn't support timeout unlike Python's `subprocess.run(timeout=5)`.

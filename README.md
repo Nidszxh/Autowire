@@ -29,7 +29,7 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 | Libadwaita | 1.5+ |
 | WirePlumber | 0.5+ |
 | GJS | 1.80+ |
-| Python (optional, for tests) | 3.11+ |
+
 
 ---
 
@@ -46,16 +46,7 @@ gjs -I src/ src/main.js
 gjs -I src/ src/daemon_main.js
 ```
 
-No build step required — the GJS version builds its UI programmatically.
-
----
-
-## Development
-
-```bash
-# Tests (Python-only, 60 tests)
-python3 -m pytest tests/ -v
-```
+No build step required — builds its UI programmatically.
 
 ---
 
@@ -126,32 +117,21 @@ autowire/
 ├── build-aux/meson/
 │   └── postinstall.py          # Post-install: icon cache, db, systemd enable
 ├── data/
-│   ├── ui/                     # Blueprint templates (for GResource, not required by GJS)
-│   ├── io.github.nidszxh.Autowire.gresource.xml
+│   ├── *.service               # systemd + D-Bus service files
 │   ├── io.github.nidszxh.Autowire.desktop.in
 │   ├── io.github.nidszxh.Autowire.metainfo.xml
-│   ├── io.github.nidszxh.Autowire.Daemon.service
-│   └── io.github.nidszxh.Autowire.service
-├── src/
-│   ├── main.js                 # Adw.Application entry point (GJS — primary)
-│   ├── window.js               # Main window, programmatic UI (GJS)
-│   ├── profile_dialog.js       # Create/edit dialog (GJS)
-│   ├── config_mgr.js           # Atomic JSON profile storage (GJS)
-│   ├── daemon.js               # Routing engine + stream-aware switching (GJS)
-│   ├── daemon_main.js          # Daemon entry point (GJS)
-│   ├── wp_monitor.js           # PW poll-based monitor + capture stream detection (GJS)
-│   ├── main.py                 # Python equivalent (reference/tests only)
-│   ├── window.py
-│   ├── profile_dialog.py
-│   ├── config_mgr.py
-│   ├── daemon.py
-│   ├── daemon_main.py
-│   └── wp_monitor.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_config_mgr.py
-│   ├── test_daemon_routing.py
-│   └── test_wp_monitor.py
+│   └── meson.build
+├── src/                        # Production GJS code
+│   ├── main.js                 # UI entry (GTK/Adwaita)
+│   ├── window.js               # Profile list
+│   ├── profile_dialog.js       # Create/edit dialog
+│   ├── config_mgr.js           # profiles.json persistence
+│   ├── daemon.js               # Routing engine
+│   ├── daemon_main.js          # Daemon process
+│   ├── wp_monitor.js           # Poll-based WpCore wrapper
+│   ├── autowire.in             # Meson launcher template
+│   ├── autowire-daemon.in      # Meson daemon template
+│   └── meson.build
 ├── docs/
 │   └── architecture.md
 ├── io.github.nidszxh.Autowire.json

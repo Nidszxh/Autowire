@@ -33,18 +33,6 @@ custom_target('chmod-autowire-daemon',
   command: ['sh', '-c', 'chmod +x "$1" && touch "$2"', 'sh', '@INPUT@', '@OUTPUT@'],
 )
 
-python.install_sources(
-  '__init__.py',
-  'main.py',
-  'window.py',
-  'profile_dialog.py',
-  'config_mgr.py',
-  'daemon.py',
-  'daemon_main.py',
-  'wp_monitor.py',
-  subdir: 'autowire',
-)
-
 install_data(
   'main.js',
   'window.js',

@@ -95,6 +95,7 @@ var WpMonitor = GObject.registerClass({
         this._desc_to_name = {};
         for (const node of current) {
             this._desc_to_name[node['description']] = node['name'];
+        this._desc_to_name[node['name']] = node['name'];
 
             if (!prev_names.has(node['name'])) {
                 this._nodes[node['name']] = node;
@@ -181,6 +182,7 @@ function _fetch_capture_streams() {
     const capture_by_target = {};
 
     let in_streams = false;
+    const port_re = /^\s+\d+\.\s+(\S+)\s*>\s*(.+?):\S+\s+\[(active|init)\]/;
 
     for (const line of lines) {
         const stripped = line.trim();
@@ -192,15 +194,20 @@ function _fetch_capture_streams() {
 
         if (!in_streams) continue;
 
-        if (!line.startsWith(' │')) {
+        if (!stripped) continue;
+
+        if (!stripped.match(/^\d+\.\s/)) {
             in_streams = false;
             continue;
         }
 
-        const sub_m = line.match(/\s+│\s+\d+\.\s+(input_\S+)\s.*>\s(.+?):\S+\s+\[(active|init)\]/);
-        if (sub_m) {
-            const target_desc = sub_m[2].trim();
-            capture_by_target[target_desc] = (capture_by_target[target_desc] || 0) + 1;
+        const port_m = stripped.match(port_re);
+        if (port_m) {
+            const port_name = port_m[1];
+            if (port_name.startsWith('input_')) {
+                const target = port_m[2].trim();
+                capture_by_target[target] = (capture_by_target[target] || 0) + 1;
+            }
         }
     }
 
