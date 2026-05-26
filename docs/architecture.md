@@ -8,6 +8,26 @@ Detailed reference for contributors and reviewers. For a quick overview, see `RE
 
 Autowire is two separate processes that communicate only through a shared JSON file.
 
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ┌──────────────────────┐      ┌─────────────────────────┐  │
+│  │       UI             │      │       DAEMON             │  │
+│  │  main.js + window.js │      │  daemon_main.js          │  │
+│  │  profile_dialog.js   │      │  daemon.js + wp_monitor.js│ │
+│  │                      │      │                         │  │
+│  │  GTK4 + Adwaita      │      │  GLib-only (no GTK)     │  │
+│  │  gjs -I src/         │      │  gjs -I src/            │  │
+│  │  src/main.js         │      │  src/daemon_main.js     │  │
+│  └──────────┬───────────┘      └──────────┬──────────────┘  │
+│             │                              │                 │
+│             └──────────┬───────────────────┘                 │
+│                        ▼                                    │
+│              ~/.config/autowire/                             │
+│                  profiles.json                               │
+│             (UI writes, Daemon watches)                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
 | Process | Entry point (GJS) | Dependencies |
 |---|---|---|
 | **UI** | `gjs -I src/ src/main.js` | GTK 4, Adwaita, WirePlumber |
@@ -36,14 +56,17 @@ Atomic writes: `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.re
 ### `daemon.js`
 Core routing logic + stream-aware capture switching.
 
-- `set_system_default(node_name)` → `boolean` — resolves node name to numeric PW ID via `wpctl inspect`, then `wpctl set-default <id>`
+- `set_system_default(node_name)` → `boolean` — resolves node name to numeric PW ID via `wpctl inspect`, then `wpctl set-default <id>`. If `node_name` is empty and device is a BT headset, auto-discovers the sink/source from the `bluez_card.MAC`.
 - `set_bt_profile(device_global_id, profile_name)` → `boolean` — `wpctl set-profile <id> <profile>`
-- `check_and_route_device(node_name, monitor)` → `boolean` — loads profiles, **skips any where `is_active != true`**, checks `_active_capture_nodes` for BT profile selection, fires routing actions on the first matching active profile
-- `handle_capture_started(node_name, monitor)` — cancels restore timer, switches to `bt_profile_call`
-- `handle_capture_stopped(node_name, monitor)` — starts 3s debounce, on expiry restores `bt_profile`
+- `check_and_route_device(node_name, monitor)` → `boolean` — loads profiles, **skips any where `is_active != true`**, checks `_any_active_capture_for()` across BT card siblings, fires routing actions on the first matching active profile
+- `handle_capture_started(node_name, monitor)` — cancels restore timer, routes BT mic as default source, switches to `bt_profile_call`
+- `handle_capture_stopped(node_name, monitor)` — starts 3s debounce, on expiry restores `bt_profile` and re-routes BT sink as default
 - `build_monitor()` → `WpMonitor` — creates monitor wired with `node-added`, `device-added`, `capture-started`, `capture-stopped` signals
-- `_bt_card_name(node_name)` — derives `bluez_card.XX_XX_...` from `bluez_output.XX_XX_...`
-- `_resolve_node_id(node_name)` — parses `wpctl status` for numeric IDs, `wpctl inspect`s each to match `node.name`
+- `_get_active_profile_for(node_name)` → `Object | null` — tries exact `trigger_device_name == node_name` match, then falls back to BT card match: finds any active profile whose trigger shares the same `bluez_card.MAC`
+- `_any_active_capture_for(node_name)` → `boolean` — checks whether any node sharing the same `bluez_card.MAC` has an active capture (bridges the gap between `bluez_input.XX.*` capture events and `bluez_output.XX.*` profile triggers)
+- `_bt_card_equal(a, b)` → `boolean` — compares two `bluez_card.XX` names for equality
+- `_bt_card_name(node_name)` → `string | null` — derives `bluez_card.XX_XX_...` from `bluez_output.XX_XX_...` or `bluez_input.XX_XX_...`
+- `_resolve_node_id(node_name)` → `number | null` — parses `wpctl status` for numeric IDs, `wpctl inspect`s each to match `node.name`
 - `_last_routed` dict + 5s cooldown, `_capture_timers` dict + 3s debounce
 
 ### `wp_monitor.js`
@@ -99,44 +122,146 @@ GTK UI entry point.
 
 ## Data Flow
 
+### Profile Creation (UI side)
+
 ```
-User opens ProfileDialog
-    └─► GLib.idle_add → get_audio_nodes_sync() via wpctl
-            └─► results → _on_devices_loaded()
-                            └─► ComboRow models set
-                                    └─► GLib.idle_add → _on_devices_loaded_idle()
-                                            └─► _validate() + _prefill()
+ User opens ProfileDialog
+     │
+     ▼
+ GLib.idle_add → get_audio_nodes_sync() via wpctl
+     │
+     ▼
+ _on_devices_loaded()
+     ├─ ComboRow models set
+     └─ GLib.idle_add → _on_devices_loaded_idle()
+           └─ _validate() + _prefill()
 
-User clicks Save
-    └─► config_mgr.save_profile(..., is_active) writes profiles.json (atomic)
-            └─► Daemon's GLib.FileMonitor detects change
-                    └─► re-routes all active nodes (config file change path)
+ User clicks Save
+     │
+     ▼
+ config_mgr.save_profile(name, trigger, sink, source, bt, ...)
+     │
+     ├─ If is_active=true: deactivate all siblings for this trigger
+     ├─ Atomic write: tmpdir → file_set_contents → rename
+     └─ (Daemon's Gio.FileMonitor detects change)
+```
 
-Device connects (USB/BT/HDMI)
-    └─► WirePlumber creates WpNode
-            └─► WpMonitor polls → detects new node
-                    └─► daemon.check_and_route_device()
-                            ├► 5s cooldown check
-                            ├► load_profiles() → filter is_active=True for this trigger
-                            ├► (if auto_switch + active capture → use bt_profile_call)
-                            ├► wpctl set-default <sink>
-                            ├► wpctl set-default <source>
-                            └► if bt_profile: wpctl set-profile <id> <codec>
+### Device Routing (Daemon side)
 
-App starts/stops mic capture
-    └─► WpMonitor._poll_streams() detects input_* stream
-            ├► 0→1 transition → emit 'capture-started'
-            │       └─► daemon.handle_capture_started()
-            │               ├► cancel pending restore timer
-            │               └► wpctl set-profile <id> <bt_profile_call>
-            └► 1→0 transition → emit 'capture-stopped'
-                    └─► daemon.handle_capture_stopped()
-                            └► 3s debounce timer
-                                    └► if no new capture → wpctl set-profile <id> <bt_profile>
+```
+ Device connects (USB / BT / HDMI)
+     │
+     ▼
+ WirePlumber creates WpNode
+     │
+     ▼
+ WpMonitor polls → detects new node
+     │
+     ▼
+ daemon.check_and_route_device(node_name, monitor)
+     │
+     ├── 5s cooldown check (skip if routed recently)
+     │
+     ├── _get_active_profile_for(node_name)
+     │     ├─ Exact: trigger_device_name == node_name ?
+     │     └─ Fallback: same bluez_card.MAC as node_name ?
+     │
+     ├── if no profile found → skip
+     │
+     ├── if bt_profile AND _any_active_capture_for(node_name):
+     │       use bt_profile_call instead
+     │
+     ├── if default_sink is empty AND bt headset:
+     │       auto-discover BT sink from bluez_card.MAC
+     │       → wpctl set-default <sink_id>
+     │
+     ├── if default_source is empty AND bt headset:
+     │       auto-discover BT source from bluez_card.MAC
+     │       → wpctl set-default <source_id>
+     │
+     ├── set_system_default(sink) → _resolve_node_id(sink) → wpctl set-default <id>
+     ├── set_system_default(source) → _resolve_node_id(source) → wpctl set-default <id>
+     │
+     └── if bt_profile:
+           _bt_card_name(node) → bluez_card.MAC
+           monitor.get_device_global_id(card) → global_id
+           wpctl set-profile <global_id> <profile>
+```
 
-Daemon startup
-    └─► for each node in monitor.get_audio_nodes():
-            └─► check_and_route_device(node_name, monitor)
+### Capture-Aware Switching
+
+```
+                          ┌──────────────────────┐
+                          │  wpctl status polls  │
+                          │  every 3 seconds     │
+                          └──────────┬───────────┘
+                                     │
+                          parse Streams section
+                                     │
+                          ┌──────────┴──────────┐
+                          │                     │
+                    input_* appears       input_* disappears
+                          │                     │
+                          ▼                     ▼
+              ┌────────────────────┐   ┌────────────────────┐
+              │ capture-started    │   │ capture-stopped    │
+              │ 0→1 transition    │   │ 1→0 transition     │
+              └────────┬───────────┘   └────────┬───────────┘
+                       │                        │
+                       ▼                        ▼
+              ┌────────────────────┐   ┌────────────────────┐
+              │ Cancel any pending │   │ Start 3s debounce  │
+              │ restore timer      │   │ timer              │
+              │                    │   │                    │
+              │ Add node to        │   │ ┌────────────────┐ │
+              │ _active_capture_   │   │ │ No new capture │ │
+              │ nodes              │   │ │ in 3s?         │ │
+              │                    │   │ └───────┬────────┘ │
+              │ wpctl set-profile  │   │         │ yes      │
+              │ <id> bt_profile_   │   │         ▼          │
+              │ call (HSP/HFP)     │   │ Remove from        │
+              │                    │   │ _active_capture_   │
+              │ Route BT mic as    │   │ nodes              │
+              │ default source     │   │                    │
+              └────────────────────┘   │ wpctl set-profile  │
+                                       │ <id> bt_profile   │
+                                       │ (A2DP)            │
+                                       │                    │
+                                       │ Route BT sink as   │
+                                       │ default            │
+                                       └────────────────────┘
+```
+
+Note: Capture fires on `bluez_input.XX.*` but profiles are keyed by `bluez_output.XX.*`.
+The daemon bridges this via `_get_active_profile_for()` which falls back to BT card MAC matching.
+
+
+### Config File Change
+
+```
+ profiles.json modified (by UI or manually)
+     │
+     ▼
+ Gio.FileMonitor fires 'changed'
+     │
+     ▼
+ Re-route all currently tracked nodes
+ (calls check_and_route_device for each)
+```
+
+### Daemon Startup
+
+```
+ daemon_main.js starts
+     │
+     ├─ Wp.init(Wp.InitFlags.ALL)
+     ├─ build_monitor() → WpMonitor
+     ├─ monitor.start() → polls begin
+     ├─ FileMonitor installed on profiles.json
+     │
+     └─ on 'ready' event:
+           for each node in monitor.get_audio_nodes():
+               check_and_route_device(node_name, monitor)
 ```
 
 ---
@@ -186,7 +311,7 @@ Daemon startup
 
 ## Autostart
 
-**System install:** `postinstall.py` copies `io.github.nidszxh.Autowire.Daemon.service` to `~/.config/systemd/user/` and runs `systemctl --user enable --now`.
+**System install:** `build-aux/meson/postinstall.py` copies `io.github.nidszxh.Autowire.Daemon.service` to `~/.config/systemd/user/` and runs `systemctl --user enable --now`.
 
 **Flatpak:** `io.github.nidszxh.Autowire.service` (D-Bus session service) tells the D-Bus session bus to launch `autowire-daemon` on login. No systemd needed inside the sandbox.
 
@@ -206,3 +331,6 @@ Daemon startup
 - **Config file watcher** uses `Gio.File.new_for_path(path).monitor()` (GJS 1.80+ API, not `Gio.FileMonitor.new_for_path`).
 - **Signal handling** uses `GLibUnix.signal_add()` with numeric signals (GJS 1.80+ API, not `GLib.unix_signal_add`).
 - **capture-started/stopped signals** only fire on 0→1 / 1→0 transitions (never repeated for same state). Daemon can safely react to each event once.
+- **BT card-aware profile matching** — capture events fire on `bluez_input.XX.MAC` but profiles are keyed by `bluez_output.XX.MAC`. The daemon's `_get_active_profile_for()` tries the exact trigger match first; if that fails, it extracts the `bluez_card.MAC` from both the connecting node and all profile triggers, and returns the first matching active profile on the same BT card. This ensures that mic activation via `bluez_input.XX.handsfree-headset` correctly finds a profile configured for `bluez_output.XX.a2dp-sink`.
+- **`_any_active_capture_for(node_name)`** checks across BT card siblings — if `node_name` is `bluez_output.XX.a2dp-sink`, it checks whether `bluez_input.XX.*` has an active capture. This bridges the gap between output-keyed routing and input-keyed capture tracking.
+- **Auto-route BT input/output** — when a profile has `bt_profile` set but empty `default_sink`/`default_source`, the daemon auto-discovers the corresponding BT sink and source node names by scanning all nodes, finding ones that share the same `bluez_card.MAC`, and routing both. This removes the need for users to manually select sink/source for BT profiles.

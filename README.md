@@ -65,21 +65,50 @@ flatpak run io.github.nidszxh.Autowire
 ### The Double-Headed Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Autowire UI (GTK4 / Adwaita)                       │
-│  • Create/edit/delete audio profiles                │
-│  • Toggle which profile is active per device        │
-│  • Writes to profiles.json on save                  │
-└──────────────┬──────────────────────────────────────┘
-               │ profiles.json
-               ▼
-┌─────────────────────────────────────────────────────┐
-│  Autowire Daemon (GLib-only, no GTK)                │
-│  • Listens to WirePlumber node/device events        │
-│  • Matches new nodes against profiles.json           │
-│  • Runs wpctl set-default / wpctl set-profile        │
+┌──────────────────────────────────────────────────────┐
+│  UI  (main.js)     GTK4 + Adwaita                   │
+│                                                     │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │ Overview │  │  Profile     │  │  ConfigMgr   │  │
+│  │  Window   │  │  Dialog      │  │  (atomic     │  │
+│  │  (profile │──│  create/edit │──│  JSON CRUD)  │  │
+│  │   list)   │  │  + BT codecs │  │              │  │
+│  └──────────┘  └──────────────┘  └──────┬───────┘  │
+│                                         │          │
+│  gjs -I src/ src/main.js                │          │
+└─────────────────────────────────────────┼──────────┘
+                                          │
+                         reads/writes     │
+                    ~/.config/autowire/    │
+                      profiles.json       │
+                                          │
+┌─────────────────────────────────────────┼──────────┐
+│  DAEMON  (daemon_main.js)  GLib-only   │          │
+│                                         │          │
+│  ┌────────────┐   ┌──────────────┐   ┌─┴────────┐ │
+│  │  WpMonitor  │──▶│   Daemon     │──▶│ConfigMgr │ │
+│  │  polls wpctl│   │  routing     │   │ (reads)  │ │
+│  │  every 3s   │   │  engine      │   │          │ │
+│  └──────┬──────┘   └──────┬───────┘   └──────────┘ │
+│         │                 │                         │
+│         ▼                 ▼                         │
+│  ┌──────────────┐  ┌──────────────┐                │
+│  │  wpctl       │  │  Gio.File    │                │
+│  │  status      │  │  Monitor     │                │
+│  │  + inspect   │  │  (config     │                │
+│  │              │  │   changes)   │                │
+│  └──────────────┘  └──────────────┘                │
+│                                                     │
+│  gjs -I src/ src/daemon_main.js                     │
 └─────────────────────────────────────────────────────┘
 ```
+
+### Two Processes, One JSON
+
+1. **UI** writes profiles.json when user creates/edits/deletes a profile (atomic write)
+2. **Daemon** watches profiles.json via `Gio.FileMonitor` + re-routes on changes
+3. **Daemon** also polls `wpctl status` every 3s for new/removed audio nodes
+4. No IPC needed — just a shared JSON file on disk
 
 ### Profile Matching Flow
 
@@ -96,6 +125,38 @@ flatpak run io.github.nidszxh.Autowire
 
 When a profile has **Auto-switch for calls** enabled:
 
+```
+                   Capture starts              Capture stops
+                   ┌──────────┐                 ┌──────────┐
+                   │ Discord/ │                 │ Discord/ │
+                   │ Zoom/    │                 │ Zoom/    │
+                   │ Meet mic │                 │ Meet mic │
+                   │  opens   │                 │  closes  │
+                   └────┬─────┘                 └────┬─────┘
+                        │                           │
+                        ▼                           ▼
+              ┌─────────────────┐          ┌─────────────────┐
+              │ wpctl status    │          │ wpctl status    │
+              │ Streams shows   │          │ Streams shows   │
+              │ input_* entry   │          │ no input_*      │
+              └────────┬────────┘          └────────┬────────┘
+                       │                            │
+                       ▼                            ▼
+              ┌─────────────────┐          ┌────────────────────────┐
+              │ emit            │          │ emit                   │
+              │ 'capture-started'│          │ 'capture-stopped'     │
+              └────────┬────────┘          └────────┬───────────────┘
+                       │                            │
+                       ▼                            ▼
+              ┌──────────────────────┐   ┌───────────────────────────┐
+              │ Cancel restore timer │   │ Start 3s debounce timer   │
+              │ Switch to HSP/HFP   │   │ (tolerates PTT gaps)      │
+              │ wpctl set-profile   │   │ If no new capture in 3s:  │
+              │  handsfree-headset  │   │   wpctl set-profile       │
+              └──────────────────────┘   │   a2dp-sink-aac          │
+                                          └───────────────────────────┘
+```
+
 1. An app captures the mic (Discord, Zoom, `arecord`, etc.)
 2. `WpMonitor` detects the `input_*` stream from `wpctl status` → emits `capture-started`
 3. Daemon cancels any pending restore, switches to `bt_profile_call` (e.g. `handsfree-headset — mSBC`)
@@ -103,6 +164,8 @@ When a profile has **Auto-switch for calls** enabled:
 5. App stops capturing → daemon starts 3s debounce (tolerates push-to-talk gaps)
 6. No new capture within 3s → daemon restores `bt_profile` (e.g. AAC, LDAC)
 7. High-quality audio returns
+
+**Important:** Capture events fire on the `bluez_input.XX.*` node name, but profiles are keyed by `bluez_output.XX.*`. The daemon's `_get_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC` — ensuring the correct profile is found regardless of whether the input or output node triggers routing.
 
 ### Active Profile Rule
 
@@ -115,29 +178,36 @@ Only **one** profile per trigger device can be `is_active: true`. When you save 
 ```
 autowire/
 ├── build-aux/meson/
-│   └── postinstall.py          # Post-install: icon cache, db, systemd enable
+│   └── postinstall.py         # Post-install: icon cache, db, systemd enable
+│
 ├── data/
-│   ├── *.service               # systemd + D-Bus service files
+│   ├── *.service               # systemd --user + D-Bus session service
 │   ├── io.github.nidszxh.Autowire.desktop.in
 │   ├── io.github.nidszxh.Autowire.metainfo.xml
 │   └── meson.build
-├── src/                        # Production GJS code
-│   ├── main.js                 # UI entry (GTK/Adwaita)
-│   ├── window.js               # Profile list
-│   ├── profile_dialog.js       # Create/edit dialog
-│   ├── config_mgr.js           # profiles.json persistence
-│   ├── daemon.js               # Routing engine
-│   ├── daemon_main.js          # Daemon process
-│   ├── wp_monitor.js           # Poll-based WpCore wrapper
-│   ├── autowire.in             # Meson launcher template
-│   ├── autowire-daemon.in      # Meson daemon template
+│
+├── src/                        # All GJS code (no Python)
+│   ├── main.js                 # ──┐  UI entry (Adw.Application)
+│   ├── window.js               #   │  Profile list, grouped by trigger
+│   ├── profile_dialog.js       #   ├─ GTK4 + Adwaita
+│   │                           #   │
+│   ├── config_mgr.js           # ──┤  Shared: atomic JSON CRUD
+│   │                           #   │
+│   ├── daemon.js               #   │  Routing engine + BT switching
+│   ├── daemon_main.js          #   ├─ GLib-only (no GTK)
+│   ├── wp_monitor.js           #   │  Poll-based WpCore wrapper
+│   │                           #   │
+│   ├── autowire.in             # ──┤  Meson launchers (bash+gjs)
+│   ├── autowire-daemon.in      #   │
 │   └── meson.build
+│
 ├── docs/
 │   └── architecture.md
-├── io.github.nidszxh.Autowire.json
-├── meson.build
-├── meson_options.txt
-└── AGENTS.md
+│
+├── io.github.nidszxh.Autowire.json   # Flatpak manifest
+├── meson.build                       # Root build definition
+├── meson_options.txt                 # Meson options (profile=devel/release)
+└── AGENTS.md                         # LLM agent instructions
 ```
 
 ---

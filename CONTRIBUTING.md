@@ -32,6 +32,26 @@ All code is pure GJS (no Python).
 
 **Two independent processes** — the UI and the daemon are completely separate. They only share `~/.config/autowire/profiles.json`.
 
+```
+                       ┌──────────────────────┐
+                       │  profiles.json        │
+                       │  ~/.config/autowire/  │
+                       └──────┬───────┬───────┘
+                              │       │
+                     writes   │       │  watches
+                              │       │
+              ┌───────────────┘       └───────────────┐
+              ▼                                       ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│       UI PROCESS        │             │     DAEMON PROCESS      │
+│  main.js  (GTK+Adwaita) │             │  daemon_main.js (GLib)  │
+│                         │             │                         │
+│  window.js              │             │  daemon.js (routing)    │
+│  profile_dialog.js      │             │  wp_monitor.js (poll)   │
+│  config_mgr.js (write)  │             │  config_mgr.js (read)   │
+└─────────────────────────┘             └─────────────────────────┘
+```
+
 - **UI** (`src/main.js`) requires GTK, Adwaita, and WirePlumber GObject bindings.
 - **Daemon** (`src/daemon_main.js`) imports only `GLib`, `Gio`, `config_mgr`, and `daemon`. No GTK. This is intentional — the daemon must run in headless environments.
 
@@ -47,14 +67,31 @@ Each profile has an `is_active` boolean. Only one profile per trigger device can
 
 ### Stream-Aware Auto-Switching
 
-When a profile has `auto_switch: true`, the daemon monitors capture streams via `WpMonitor._poll_streams()` (parses `wpctl status` Streams section). On detecting an `input_*` stream targeting the device:
+When a profile has `auto_switch: true`, the daemon monitors capture streams via `WpMonitor._poll_streams()`:
 
-1. **`capture-started`** signal fires — daemon cancels any pending restore timer, sets `bt_profile_call` (e.g. `handsfree-headset`)
-2. **`capture-stopped`** signal fires — daemon starts a 3s debounce timer; on expiry restores `bt_profile` (e.g. `a2dp-sink-aac`)
+```
+  wpctl status → Streams section
+       │
+       ├── input_* appears  →  emit 'capture-started'
+       │                        └─ switch to bt_profile_call (HSP/HFP)
+       │                           route BT mic as default source
+       │
+       └── input_* disappears →  emit 'capture-stopped'
+                                 └─ 3s debounce timer
+                                    └─ if no new capture → restore bt_profile (A2DP)
+                                                           route BT sink as default
+```
+
+On detecting an `input_*` stream targeting the device:
+
+1. **`capture-started`** signal fires — daemon cancels any pending restore timer, routes BT mic as default source, sets `bt_profile_call` (e.g. `handsfree-headset`)
+2. **`capture-stopped`** signal fires — daemon starts a 3s debounce timer; on expiry restores `bt_profile` (e.g. `a2dp-sink-aac`) and re-routes BT sink as default
 
 If a new capture starts during debounce, the timer is cancelled. This handles push-to-talk gaps.
 
-`check_and_route_device()` also checks `_active_capture_nodes` at initial routing time — if a device connects while a call is already active, it uses `bt_profile_call` instead of `bt_profile`.
+**BT card bridging:** Capture events fire on `bluez_input.XX.*` but profiles are keyed by `bluez_output.XX.*`. The daemon's `_get_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC`. `_any_active_capture_for()` checks whether any node sharing the same BT card has an active capture. Both functions live in `daemon.js`.
+
+`check_and_route_device()` also checks `_any_active_capture_for()` at initial routing time — if a device connects while a call is already active, it uses `bt_profile_call` instead of `bt_profile`.
 
 ## Code Style
 

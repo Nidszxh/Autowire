@@ -4,13 +4,26 @@ All notable changes to Autowire are documented here.
 
 ## [Unreleased]
 
+### Python removal and source cleanup
+- **All `.py` source files removed** — `src/*.py`, `src/exp/*.py`, `tests/*.py` deleted. Only GJS remains.
+- **`src/prod/` flattened** — 7 JS files moved to `src/` directly; all `imports.prod.*` changed to `imports.*`.
+- **Meson launchers rewritten** — `autowire.in` / `autowire-daemon.in` changed from Python to bash wrappers exec'ing `gjs` with dev-mode path detection.
+- **No GJS test suite** — all 60 Python tests were removed; zero JS test coverage exists.
+
+### Stream-aware BT auto-switching fixes
+- **`_fetch_capture_streams()` parsing fix** — `wpctl status` Streams sub-entries use space indentation (not `│` pipes). Rewrote regex and section parsing to correctly detect `input_*` / `output_*` stream targets.
+- **BT card-aware profile matching** — capture events fire with `bluez_input.XX.handsfree-headset` but profiles are keyed by `bluez_output.XX.a2dp-sink`. Added `_get_active_profile_for()` with exact-match → BT card fallback.
+- **Cross-card capture lookup** — `check_and_route_device()` used `_active_capture_nodes.has(output_name)` but captures stored by input name. Added `_any_active_capture_for()` checking all BT card siblings.
+- **Auto-route BT input/output** — when profile actions have empty `default_sink`/`default_source` for a BT device, daemon auto-discovers corresponding sink/source nodes via `bluez_card.MAC` and routes them.
+- **Bidirectional `_desc_to_name`** — `wp_monitor.js` now maps both `description → name` and `name → name` so stream target descriptions resolve correctly.
+
 ### GJS Migration (primary runtime)
-- **GJS-first** — all source files ported from Python to GJS. Stale Python files and tests removed.
+- **GJS-first** — all source files ported from Python to GJS.
 - **Poll-based WpMonitor** — replaces Wp.ObjectManager (GJS bindings can't read proxy properties). Uses `wpctl status` + `wpctl inspect` in 3s poll cycle.
 - **Programmatic UI** — no Blueprint/GResource templates needed. All widgets built in code.
 - **Daemon reworked** — `GLibUnix.signal_add` for signal handling, `Gio.File.monitor` for config watching, numeric node ID resolution for wpctl.
 
-### Stream-aware auto-switching
+### Stream-aware auto-switching (initial)
 - **Capture stream detection** — `_poll_streams()` parses `wpctl status` Streams section, detects `input_*` sub-entries, maps target descriptions to node names. Emits `capture-started`/`capture-stopped` GObject signals.
 - **Auto-switch for calls** — daemon switches to `bt_profile_call` (e.g. HSP/HFP) on mic activity, restores `bt_profile` (e.g. AAC) after 3s debounce. Profile dialog has Call BT Profile + Auto-switch toggle.
 - **`_active_capture_nodes` tracking** — `check_and_route_device()` checks active capture state at routing time to select correct BT profile.

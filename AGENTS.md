@@ -7,20 +7,44 @@ Libadwaita/GTK4 app + headless daemon for automated PipeWire/WirePlumber audio p
 ## Architecture (Two Processes, One JSON)
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  UI  (src/main.js — GJS, GTK4 + Adwaita + Wp)           │
-│  gjs -I src/ src/main.js                                 │
-│  Builds: AutowireWindow, ProfileDialog                   │
-│  Reads/writes: ~/.config/autowire/profiles.json          │
-└──────────────────────┬───────────────────────────────────┘
-                       │ profiles.json
-                       v
-┌──────────────────────────────────────────────────────────┐
-│  Daemon (src/daemon_main.js — GJS, GLib only, no GTK)    │
-│  gjs -I src/ src/daemon_main.js                           │
-│  Polls wpctl every 3s; routes audio on node-inserted     │
-│  Monitors profiles.json via Gio.FileMonitor               │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        UI  PROCESS                           │
+│  src/main.js  —  GTK4 + Adwaita + Wp                        │
+│                                                            │
+│  ┌────────────┐   ┌────────────┐   ┌──────────────────┐    │
+│  │  Window     │   │  Profile   │   │   ConfigMgr      │    │
+│  │  (profile   │──▶│  Dialog    │──▶│  writes profiles │    │
+│  │   list)     │   │  (create/  │   │  .json atomically│    │
+│  └────────────┘   │   edit)    │   └────────┬─────────┘    │
+│                   └────────────┘            │               │
+│  gjs -I src/ src/main.js                    │               │
+└─────────────────────────────────────────────┼───────────────┘
+                                              │
+                           ~/.config/autowire/
+                           profiles.json
+                                              │
+                                              v
+┌─────────────────────────────────────────────┼───────────────┐
+│                      DAEMON PROCESS         │               │
+│  src/daemon_main.js  —  GLib-only, no GTK   │               │
+│                                             │               │
+│  ┌──────────────┐   ┌──────────────┐   ┌────┴────────┐    │
+│  │  WpMonitor   │──▶│   Daemon     │──▶│  ConfigMgr  │    │
+│  │  polls wpctl │   │  routing     │   │  reads      │    │
+│  │  every 3s    │   │  engine      │   │  profiles   │    │
+│  └──────┬───────┘   └──────┬───────┘   │  .json      │    │
+│         │                  │           └─────────────┘    │
+│         │                  │                               │
+│         ▼                  ▼                               │
+│  ┌──────────────┐   ┌──────────────┐                      │
+│  │  wpctl       │   │  Gio.File    │                      │
+│  │  status      │   │  Monitor     │                      │
+│  │  + inspect   │   │  (config     │                      │
+│  │              │   │   changes)   │                      │
+│  └──────────────┘   └──────────────┘                      │
+│                                                            │
+│  gjs -I src/ src/daemon_main.js                            │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## File Map
@@ -68,16 +92,28 @@ daemon_main.js:main()
 
 check_and_route_device(node_name, monitor?)
   5s cooldown (_last_routed per node_name)
-  load_profiles() → first match: trigger==name AND is_active
-  set_system_default(sink) / set_system_default(source)
-    └─ _resolve_node_id(name): wpctl status → candidates → wpctl inspect to find node.name → numeric ID
-    └─ wpctl set-default <numeric_id>
-  if bt_profile:
-    _bt_card_name(node) → bluez_card.XX (MAC preserved)
-    monitor.get_device_global_id(card) → numeric PW global ID
-    wpctl set-profile <global_id> <profile>
-  if auto_switch + _active_capture_nodes.has(name):
-    use bt_profile_call instead of bt_profile
+
+  ┌─ load_profiles() → _get_active_profile_for(name)
+  │   tries exact match first (trigger == name)
+  │   falls back to BT card match: any active profile
+  │   whose trigger_device_name shares the same
+  │   bluez_card.MAC as the connecting node
+  │
+  ├─ set_system_default(sink) / set_system_default(source)
+  │   if sink/source is empty AND bt_profile is set:
+  │     auto-discover BT sink/source via card name
+  │   └─ _resolve_node_id(name):
+  │        wpctl status → candidates → wpctl inspect
+  │        to find node.name → numeric ID
+  │   └─ wpctl set-default <numeric_id>
+  │
+  ├─ if bt_profile AND _any_active_capture_for(name):
+  │     use bt_profile_call instead of bt_profile
+  │
+  └─ if bt_profile:
+       _bt_card_name(node) → bluez_card.XX (MAC preserved)
+       monitor.get_device_global_id(card) → numeric PW global ID
+       wpctl set-profile <global_id> <profile>
 ```
 
 ## Capture-Aware BT Switching Flow
@@ -95,6 +131,12 @@ handle_capture_started(name, mon)
   _active_capture_nodes.add(name)
   get_active_profile(name) → if auto_switch:
     wpctl set-profile <id> <bt_profile_call> (e.g. handsfree-headset)
+    ╔══════════════════════════════════════════════════╗
+    ║  NOTE: capture fires with bluez_input.XX.*       ║
+    ║  but profile trigger is bluez_output.XX.*        ║
+    ║  _get_active_profile_for() tries exact match     ║
+    ║  first, then falls back to BT card MAC match     ║
+    ╚══════════════════════════════════════════════════╝
        │
 App stops mic → stream disappears
   │
@@ -149,6 +191,7 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 - **Atomic writes** — `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.rename()`.
 - **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 2000ms rate limit.
 - **Polling:** 3s interval, 5s routing cooldown (per node name), 3s capture debounce.
+- **BT card-aware matching** — `_get_active_profile_for()` falls back to same-`bluez_card.MAC` match when exact trigger match fails. `_any_active_capture_for()` checks BT card siblings for capture state.
 
 ## Known Issues
 
