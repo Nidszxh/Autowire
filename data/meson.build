@@ -22,3 +22,8 @@ install_data(
   'io.github.nidszxh.Autowire.service',
   install_dir: datadir / 'dbus-1' / 'session-services',
 )
+
+install_subdir(
+  'icons',
+  install_dir: datadir,
+)

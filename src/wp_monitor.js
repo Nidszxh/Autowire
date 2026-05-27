@@ -1,13 +1,7 @@
 imports.gi.versions.Wp = '0.5';
-const { GLib, GObject, Wp } = imports.gi;
+const { GLib, GObject, Gio, Wp } = imports.gi;
 
 print('[WpMonitor] module loaded');
-
-const _AUDIO_MEDIA_CLASSES = new Set([
-    'Audio/Sink',
-    'Audio/Source',
-    'Audio/Duplex',
-]);
 
 const _POLL_INTERVAL_MS = 3000;
 
@@ -26,6 +20,7 @@ var WpMonitor = GObject.registerClass({
         super();
         this._core = null;
         this._poll_id = 0;
+        this._polling = false;
         this._nodes = {};
         this._devices = {};
         this._capture_counts = {};
@@ -36,6 +31,21 @@ var WpMonitor = GObject.registerClass({
     start() {
         this._core = Wp.Core.new(null, null, null);
         GObject.signal_connect(this._core, 'connected', () => this._on_core_connected());
+        GObject.signal_connect(this._core, 'disconnected', () => {
+            print('[WpMonitor] Core disconnected, reconnecting in 5s…');
+            if (this._poll_id > 0) {
+                GLib.source_remove(this._poll_id);
+                this._poll_id = 0;
+            }
+            this._ready = false;
+            GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+                if (this._core) {
+                    print('[WpMonitor] Attempting reconnection…');
+                    this._core.connect();
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        });
         this._core.connect();
     }
 
@@ -78,24 +88,33 @@ var WpMonitor = GObject.registerClass({
     }
 
     _poll() {
-        this._poll_nodes();
-        this._poll_devices();
-        this._poll_streams();
-        if (!this._ready) {
-            this._ready = true;
-            this.emit('ready');
-        }
+        if (this._polling) return;
+        this._polling = true;
+        _fetch_wpctl_status_async(status_text => {
+            this._polling = false;
+            if (!status_text) {
+                print('[WpMonitor] Poll skipped: wpctl status failed or timed out');
+                return;
+            }
+            this._poll_nodes(status_text);
+            this._poll_devices(status_text);
+            this._poll_streams(status_text);
+            if (!this._ready) {
+                this._ready = true;
+                this.emit('ready');
+            }
+        });
     }
 
-    _poll_nodes() {
-        const current = get_audio_nodes_sync();
+    _poll_nodes(status_text) {
+        const current = _fetch_nodes_from_wpctl(status_text, this._nodes);
         const current_names = new Set(current.map(n => n['name']));
         const prev_names = new Set(Object.keys(this._nodes));
 
         this._desc_to_name = {};
         for (const node of current) {
             this._desc_to_name[node['description']] = node['name'];
-        this._desc_to_name[node['name']] = node['name'];
+            this._desc_to_name[node['name']] = node['name'];
 
             if (!prev_names.has(node['name'])) {
                 this._nodes[node['name']] = node;
@@ -114,8 +133,8 @@ var WpMonitor = GObject.registerClass({
         }
     }
 
-    _poll_devices() {
-        const current = _fetch_devices_from_wpctl();
+    _poll_devices(status_text) {
+        const current = _fetch_devices_from_wpctl(status_text);
         const current_names = new Set(current.map(d => d['name']));
         const prev_names = new Set(Object.keys(this._devices));
 
@@ -136,8 +155,8 @@ var WpMonitor = GObject.registerClass({
         }
     }
 
-    _poll_streams() {
-        const capture_by_target = _fetch_capture_streams();
+    _poll_streams(status_text) {
+        const capture_by_target = _fetch_capture_streams(status_text);
 
         const new_counts = {};
         for (const [target_desc, count] of Object.entries(capture_by_target)) {
@@ -164,30 +183,70 @@ var WpMonitor = GObject.registerClass({
     }
 });
 
-function _fetch_streams_status() {
+function _strip_tree_chars(s) {
+    return s.replace(/^[│├└─\s]+/, '');
+}
+
+function _fetch_wpctl_status() {
     try {
         const [ok, stdout] = GLib.spawn_sync(
             null, ['wpctl', 'status'],
             null, GLib.SpawnFlags.SEARCH_PATH, null
         );
-        if (!ok) return [];
-        return new TextDecoder().decode(stdout).split('\n');
+        if (!ok) return '';
+        return new TextDecoder().decode(stdout);
     } catch (e) {
-        return [];
+        return '';
     }
 }
 
-function _fetch_capture_streams() {
-    const lines = _fetch_streams_status();
+function _fetch_wpctl_status_async(callback) {
+    try {
+        const proc = Gio.Subprocess.new(
+            ['wpctl', 'status'],
+            Gio.SubprocessFlags.STDOUT_PIPE
+        );
+
+        let timed_out = false;
+        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4000, () => {
+            timed_out = true;
+            print('[WpMonitor] wpctl status timed out');
+            proc.force_exit();
+            return GLib.SOURCE_REMOVE;
+        });
+
+        proc.wait_async(null, () => {
+            GLib.source_remove(timeout_id);
+            if (timed_out) {
+                callback('');
+                return;
+            }
+            try {
+                const [, stdout] = proc.communicate_utf8(null, null);
+                callback(stdout || '');
+            } catch (e) {
+                callback('');
+            }
+        });
+    } catch (e) {
+        callback('');
+    }
+}
+
+function _fetch_capture_streams(status_text) {
+    if (!status_text) status_text = _fetch_wpctl_status();
+    const lines = status_text.split('\n');
     const capture_by_target = {};
 
     let in_streams = false;
-    const port_re = /^\s+\d+\.\s+(\S+)\s*>\s*(.+?):\S+\s+\[(active|init)\]/;
+    const port_re = /\d+\.\s+(\S+)\s*>\s*(.+?):\S+\s+\[(active|init)\]/;
 
     for (const line of lines) {
         const stripped = line.trim();
 
-        if (['Streams:', '├─ Streams:', '└─ Streams:'].includes(stripped)) {
+        const clean = _strip_tree_chars(stripped);
+
+        if (clean === 'Streams:' || clean === '├─ Streams:' || clean === '└─ Streams:') {
             in_streams = true;
             continue;
         }
@@ -196,12 +255,12 @@ function _fetch_capture_streams() {
 
         if (!stripped) continue;
 
-        if (!stripped.match(/^\d+\.\s/)) {
+        if (stripped.endsWith(':') && !stripped.match(/^\d+\.\s/)) {
             in_streams = false;
             continue;
         }
 
-        const port_m = stripped.match(port_re);
+        const port_m = clean.match(port_re);
         if (port_m) {
             const port_name = port_m[1];
             if (port_name.startsWith('input_')) {
@@ -214,36 +273,30 @@ function _fetch_capture_streams() {
     return capture_by_target;
 }
 
-function _fetch_nodes_from_wpctl() {
+function _fetch_nodes_from_wpctl(status_text, known_nodes) {
+    if (!status_text) status_text = _fetch_wpctl_status();
     const results = [];
     const seen_ids = new Set();
-
-    let status_text;
-    try {
-        const [ok, stdout] = GLib.spawn_sync(
-            null,
-            ['wpctl', 'status'],
-            null,
-            GLib.SpawnFlags.SEARCH_PATH,
-            null
-        );
-        if (!ok) return results;
-        status_text = new TextDecoder().decode(stdout);
-    } catch (e) {
-        return results;
-    }
 
     let in_sinks = false;
     let in_sources = false;
 
+    const known_by_id = {};
+    if (known_nodes) {
+        for (const node of Object.values(known_nodes)) {
+            if (node['id']) known_by_id[node['id']] = node;
+        }
+    }
+
     for (const line of status_text.split('\n')) {
         const stripped = line.trim();
-        if (['Sinks:', '├─ Sinks:', '└─ Sinks:'].includes(stripped)) {
+        const clean = _strip_tree_chars(stripped);
+        if (clean === 'Sinks:' || clean === '├─ Sinks:' || clean === '└─ Sinks:') {
             in_sinks = true;
             in_sources = false;
             continue;
         }
-        if (['Sources:', '├─ Sources:', '└─ Sources:'].includes(stripped)) {
+        if (clean === 'Sources:' || clean === '├─ Sources:' || clean === '└─ Sources:') {
             in_sources = true;
             in_sinks = false;
             continue;
@@ -265,6 +318,19 @@ function _fetch_nodes_from_wpctl() {
         let description = m[2].trim();
         const media_class = in_sinks ? 'Audio/Sink' : 'Audio/Source';
         let name = description;
+
+        const cached = known_by_id[node_id];
+        if (cached) {
+            name = cached['name'];
+            description = cached['description'] || name;
+            results.push({
+                id: node_id,
+                name: name,
+                description: description,
+                media_class: media_class,
+            });
+            continue;
+        }
 
         try {
             const [ok2, inspect_stdout] = GLib.spawn_sync(
@@ -291,6 +357,7 @@ function _fetch_nodes_from_wpctl() {
         }
 
         results.push({
+            id: node_id,
             name: name,
             description: description,
             media_class: media_class,
@@ -300,29 +367,16 @@ function _fetch_nodes_from_wpctl() {
     return results;
 }
 
-function _fetch_devices_from_wpctl() {
+function _fetch_devices_from_wpctl(status_text) {
+    if (!status_text) status_text = _fetch_wpctl_status();
     const results = [];
-
-    let status_text;
-    try {
-        const [ok, stdout] = GLib.spawn_sync(
-            null,
-            ['wpctl', 'status'],
-            null,
-            GLib.SpawnFlags.SEARCH_PATH,
-            null
-        );
-        if (!ok) return results;
-        status_text = new TextDecoder().decode(stdout);
-    } catch (e) {
-        return results;
-    }
 
     let in_devices = false;
 
     for (const line of status_text.split('\n')) {
         const stripped = line.trim();
-        if (['Devices:', '├─ Devices:', '└─ Devices:'].includes(stripped)) {
+        const clean = _strip_tree_chars(stripped);
+        if (clean === 'Devices:' || clean === '├─ Devices:' || clean === '└─ Devices:') {
             in_devices = true;
             continue;
         }
@@ -350,48 +404,22 @@ function _fetch_devices_from_wpctl() {
     return results;
 }
 
-function _new_empty_properties() {
+function get_audio_nodes_async(callback) {
+    if (typeof callback !== 'function') return;
     try {
-        return Wp.Properties.new_empty();
+        const proc = Gio.Subprocess.new(
+            ['wpctl', 'status'],
+            Gio.SubprocessFlags.STDOUT_PIPE
+        );
+        proc.communicate_utf8_async(null, null, (p, res) => {
+            try {
+                const [, stdout] = p.communicate_utf8_finish(res);
+                callback(_fetch_nodes_from_wpctl(stdout));
+            } catch (e) {
+                callback([]);
+            }
+        });
     } catch (e) {
-        return null;
+        callback([]);
     }
-}
-
-function _fetch_node_props(obj) {
-    try {
-        return obj.get_properties();
-    } catch (e) {
-        return obj.props.properties || _new_empty_properties();
-    }
-}
-
-const _proxy_properties = _fetch_node_props;
-
-function get_audio_nodes_sync(callback) {
-    const raw = _fetch_nodes_from_wpctl();
-    if (typeof callback !== 'function') {
-        return raw;
-    }
-    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-        callback(raw);
-        return GLib.SOURCE_REMOVE;
-    });
-    return null;
-}
-
-function _collect_node(props) {
-    const name = props.get('node.name') || '';
-    if (!name) {
-        return null;
-    }
-    const media_class = props.get('media.class') || '';
-    if (!_AUDIO_MEDIA_CLASSES.has(media_class)) {
-        return null;
-    }
-    return {
-        name: name,
-        description: props.get('node.description') || name,
-        media_class: media_class,
-    };
 }

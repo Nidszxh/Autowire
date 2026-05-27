@@ -5,6 +5,7 @@ print('[Config] module loaded');
 var _XDG_CONFIG_HOME = GLib.getenv('XDG_CONFIG_HOME') || GLib.build_filenamev([GLib.getenv('HOME') || '', '.config']);
 var CONFIG_DIR = GLib.build_filenamev([_XDG_CONFIG_HOME, 'autowire']);
 var CONFIG_FILE = GLib.build_filenamev([CONFIG_DIR, 'profiles.json']);
+var ERROR_FILE = GLib.build_filenamev([CONFIG_DIR, 'last_error.json']);
 
 /** @returns {boolean} */
 function _ensure_config_dir() {
@@ -55,9 +56,16 @@ function load_profiles() {
         }
     }
 
-    const hasActive = profiles.some(p => p['is_active']);
-    if (profiles.length > 0 && !hasActive) {
-        profiles[0]['is_active'] = true;
+    const triggers = [...new Set(profiles.map(p => p['trigger_device_name']))];
+    let migrated = false;
+    for (const trigger of triggers) {
+        const group = profiles.filter(p => p['trigger_device_name'] === trigger);
+        if (group.length > 0 && !group.some(p => p['is_active'])) {
+            group[0]['is_active'] = true;
+            migrated = true;
+        }
+    }
+    if (migrated) {
         _write_atomic({ profiles });
     }
 
@@ -121,7 +129,7 @@ function set_active_profile(trigger_device_name, profile_name) {
  * @param {string} bt_profile
  * @param {boolean} is_active
  */
-function save_profile(profile_name, trigger_device, default_sink, default_source, bt_profile = '', is_active = false, bt_profile_call = '', auto_switch = false) {
+function save_profile(profile_name, trigger_device, default_sink, default_source, bt_profile = '', is_active = false, bt_profile_call = '', auto_switch = false, trigger_device_display = '') {
     const profiles = load_profiles();
 
     for (let i = 0; i < profiles.length; i++) {
@@ -130,6 +138,7 @@ function save_profile(profile_name, trigger_device, default_sink, default_source
             profiles[i] = {
                 profile_name,
                 trigger_device_name: trigger_device,
+                trigger_device_display,
                 is_active,
                 actions: {
                     default_sink,
@@ -163,6 +172,7 @@ function save_profile(profile_name, trigger_device, default_sink, default_source
     profiles.push({
         profile_name,
         trigger_device_name: trigger_device,
+        trigger_device_display,
         is_active,
         actions: {
             default_sink,
@@ -200,8 +210,7 @@ function delete_profile(trigger_device_name, profile_name) {
  */
 function _write_atomic(data) {
     _ensure_config_dir();
-    const tmp_dir = GLib.dir_make_tmp('autowire_profiles_XXXXXX');
-    const tmp_path = GLib.build_filenamev([tmp_dir, 'profiles.json']);
+    const tmp_path = CONFIG_FILE + '.tmp';
 
     try {
         const json = new TextEncoder().encode(JSON.stringify(data, null, 2));
@@ -212,9 +221,71 @@ function _write_atomic(data) {
             GLib.unlink(tmp_path);
         } catch (unlinkErr) { /* ignore */ }
         throw e;
-    } finally {
-        try {
-            GLib.rmdir(tmp_dir);
-        } catch (e) { /* ignore */ }
     }
+}
+
+function write_error(message) {
+    _ensure_config_dir();
+    const data = JSON.stringify({ timestamp: Date.now(), message }, null, 2);
+    try {
+        GLib.file_set_contents(ERROR_FILE, new TextEncoder().encode(data));
+    } catch (e) {
+        print(`[Config] Failed to write error: ${e}`);
+    }
+}
+
+function read_error() {
+    try {
+        if (!GLib.file_test(ERROR_FILE, GLib.FileTest.EXISTS)) return null;
+        const [, content] = GLib.file_get_contents(ERROR_FILE);
+        return JSON.parse(new TextDecoder().decode(content));
+    } catch (e) {
+        return null;
+    }
+}
+
+function clear_error() {
+    try {
+        GLib.unlink(ERROR_FILE);
+    } catch (e) { /* ignore */ }
+}
+
+function move_profile_up(trigger_device_name, profile_name) {
+    const profiles = load_profiles();
+    const idx = profiles.findIndex(p =>
+        p['trigger_device_name'] === trigger_device_name &&
+        p['profile_name'] === profile_name
+    );
+    if (idx <= 0) return false;
+    let prev_idx = -1;
+    for (let i = idx - 1; i >= 0; i--) {
+        if (profiles[i]['trigger_device_name'] === trigger_device_name) {
+            prev_idx = i;
+            break;
+        }
+    }
+    if (prev_idx < 0) return false;
+    [profiles[idx], profiles[prev_idx]] = [profiles[prev_idx], profiles[idx]];
+    _write_atomic({ profiles });
+    return true;
+}
+
+function move_profile_down(trigger_device_name, profile_name) {
+    const profiles = load_profiles();
+    const idx = profiles.findIndex(p =>
+        p['trigger_device_name'] === trigger_device_name &&
+        p['profile_name'] === profile_name
+    );
+    if (idx < 0 || idx >= profiles.length - 1) return false;
+    let next_idx = -1;
+    for (let i = idx + 1; i < profiles.length; i++) {
+        if (profiles[i]['trigger_device_name'] === trigger_device_name) {
+            next_idx = i;
+            break;
+        }
+    }
+    if (next_idx < 0) return false;
+    [profiles[idx], profiles[next_idx]] = [profiles[next_idx], profiles[idx]];
+    _write_atomic({ profiles });
+    return true;
 }

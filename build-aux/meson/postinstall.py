@@ -30,8 +30,12 @@ def _systemd_enable() -> None:
     _call(['systemctl', '--user', 'enable', '--now', 'io.github.nidszxh.Autowire.Daemon.service'])
 
 
+def _running_in_flatpak() -> bool:
+    return os.environ.get('FLATPAK_ID') is not None or os.path.isdir('/app')
+
+
 def main() -> None:
-    if os.environ.get('DESTDIR'):
+    if os.environ.get('DESTDIR') or _running_in_flatpak():
         return
 
     prefix = os.environ.get('MESON_INSTALL_PREFIX', '/usr/local')

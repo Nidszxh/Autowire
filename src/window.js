@@ -1,6 +1,7 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
-const { Adw, GObject, Gtk } = imports.gi;
+const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
+const config_mgr = imports.config_mgr;
 
 print('[Window] module loaded');
 
@@ -22,16 +23,36 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     constructor(kwargs) {
         super(kwargs);
         this._profiles_group = null;
+        this._flashing_profiles = new Set();
+        this._config_monitor = null;
         this._build_ui();
         this._connect_signals();
         this.refresh_profiles();
+        this._watch_config();
+    }
+
+    _watch_config() {
+        try {
+            this._config_monitor = Gio.File.new_for_path(config_mgr.CONFIG_FILE).monitor(Gio.FileMonitorFlags.NONE, null);
+            this._config_monitor.connect('changed', (_mon, _file, _other, event) => {
+                if (event === Gio.FileMonitorEvent.CHANGES_DONE_HINT || event === Gio.FileMonitorEvent.CREATED) {
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        this.refresh_profiles();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            });
+        } catch (e) {
+            print(`[Window] WARNING: could not watch config: ${e}`);
+        }
     }
 
     _build_ui() {
         this.set_default_size(480, 660);
         this.set_title('Autowire');
 
-        const toolbar_view = new Adw.ToolbarView();
+        this._toolbar_view = new Adw.ToolbarView();
+        const toolbar_view = this._toolbar_view;
 
         const header_bar = new Adw.HeaderBar();
 
@@ -59,7 +80,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         const status_page = new Adw.StatusPage({
             icon_name: 'audio-speakers-symbolic',
             title: 'No Audio Profiles',
-            description: 'Add a profile to automatically route\naudio when a device connects.',
+            description: 'Connect your headset, speaker, or dock first —\nthen add a profile to route audio to it automatically.',
         });
 
         this._empty_add_button = new Gtk.Button({
@@ -94,8 +115,12 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     }
 
     refresh_profiles() {
-        const config_mgr = imports.config_mgr;
         const profiles = config_mgr.load_profiles();
+        const error = config_mgr.read_error();
+        if (error && error['message']) {
+            this._show_toast(`Error: ${error['message']}`);
+            config_mgr.clear_error();
+        }
 
         if (this._profiles_group) {
             this._profiles_page.remove(this._profiles_group);
@@ -114,7 +139,8 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         for (const [trigger, triggerProfiles] of Object.entries(groups)) {
             const triggerGroup = new Adw.PreferencesGroup();
-            triggerGroup.set_title(`${trigger} (${triggerProfiles.length})`);
+            const displayName = triggerProfiles[0]['trigger_device_display'] || trigger;
+            triggerGroup.set_title(`${displayName} (${triggerProfiles.length})`);
             for (const profile of triggerProfiles) {
                 triggerGroup.add(this._build_profile_row(profile, triggerProfiles.length > 1));
             }
@@ -141,14 +167,32 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
             subtitleParts.push(`BT: ${actions['bt_profile']}`);
         }
 
-        const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' · ') : trigger;
+        const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' · ') : (profile['trigger_device_display'] || trigger);
         const row = new Adw.ActionRow({ title: profileName, subtitle: subtitle });
 
         const sw = new Gtk.Switch({ valign: Gtk.Align.CENTER, active: profile['is_active'] || false });
         sw.connect('notify::active', () => this._on_switch_toggled(sw, profile));
         row.add_suffix(sw);
 
-        if (!hasSiblings) {
+        if (hasSiblings) {
+            const upBtn = new Gtk.Button({
+                icon_name: 'go-up-symbolic',
+                tooltip_text: 'Move Up',
+                valign: Gtk.Align.CENTER,
+            });
+            upBtn.add_css_class('flat');
+            upBtn.connect('clicked', () => this._on_move_up_clicked(profile));
+            row.add_suffix(upBtn);
+
+            const downBtn = new Gtk.Button({
+                icon_name: 'go-down-symbolic',
+                tooltip_text: 'Move Down',
+                valign: Gtk.Align.CENTER,
+            });
+            downBtn.add_css_class('flat');
+            downBtn.connect('clicked', () => this._on_move_down_clicked(profile));
+            row.add_suffix(downBtn);
+        } else {
             const editBtn = new Gtk.Button({
                 icon_name: 'document-edit-symbolic',
                 tooltip_text: 'Edit Profile',
@@ -170,6 +214,16 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         delBtn.connect('clicked', () => this._on_delete_clicked(profile));
         row.add_suffix(delBtn);
 
+        
+        const profileKey = trigger + '|' + profileName;
+        if (this._flashing_profiles && this._flashing_profiles.has(profileKey)) {
+            row.add_css_class('error');
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                row.remove_css_class('error');
+                return GLib.SOURCE_REMOVE;
+            });
+            this._flashing_profiles.delete(profileKey);
+        }
         return row;
     }
 
@@ -193,12 +247,49 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         if (!trigger || !profileName) {
             return;
         }
+        
+        let prevActive = null;
         if (sw.get_active()) {
-            imports.config_mgr.set_active_profile(trigger, profileName);
-        } else {
-            imports.config_mgr.set_active_profile(trigger, '');
+            const profiles = config_mgr.load_profiles();
+            prevActive = profiles.find(p => p['trigger_device_name'] === trigger && p['is_active'] && p['profile_name'] !== profileName);
         }
+
+        if (sw.get_active()) {
+            config_mgr.set_active_profile(trigger, profileName);
+            this._show_toast(`Activated: ${profileName}`);
+        } else {
+            config_mgr.set_active_profile(trigger, '');
+            this._show_toast(`Deactivated: ${profileName}`);
+        }
+        
+        if (prevActive) {
+            this._flashing_profiles.add(trigger + '|' + prevActive['profile_name']);
+        }
+        
         this.refresh_profiles();
+    }
+
+    _on_move_up_clicked(profile) {
+        const trigger = profile['trigger_device_name'] || '';
+        const profileName = profile['profile_name'] || '';
+        if (!trigger || !profileName) return;
+        config_mgr.move_profile_up(trigger, profileName);
+        this.refresh_profiles();
+    }
+
+    _on_move_down_clicked(profile) {
+        const trigger = profile['trigger_device_name'] || '';
+        const profileName = profile['profile_name'] || '';
+        if (!trigger || !profileName) return;
+        config_mgr.move_profile_down(trigger, profileName);
+        this.refresh_profiles();
+    }
+
+    _show_toast(message) {
+        if (this._toolbar_view) {
+            const toast = new Adw.Toast({ title: message, timeout: 2 });
+            this._toolbar_view.add_toast(toast);
+        }
     }
 
     _on_delete_clicked(profile) {
@@ -220,7 +311,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         alert.connect('response', (dialog, response) => {
             if (response === 'delete') {
-                imports.config_mgr.delete_profile(trigger, profileName);
+                config_mgr.delete_profile(trigger, profileName);
                 this.refresh_profiles();
             }
         });
