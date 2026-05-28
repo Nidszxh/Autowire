@@ -42,5 +42,11 @@ All notable changes to Autowire are documented here.
 - **Gtk.Switch active in constructor** — avoids spurious `notify::active` emissions.
 - **AboutDialog** — added with version, license, and links.
 
+### Flatpak & GJS compatibility fixes
+- **Wp typelib optional everywhere** — `main.js`, `daemon_main.js`, `wp_monitor.js` wrap Wp import/init in try-catch. Flatpak `org.gnome.Platform//50` lacks `Wp-0.5` typelib; all modules fall back to poll-only / sync mode.
+- **Profile dialog combo rows fixed** — all `Adw.PreferencesRow` widgets (EntryRow, ComboRow, SwitchRow) now inside an `Adw.PreferencesGroup` (required for ComboRow click handling). Header bar buttons compacted with `flat` + `valign: CENTER`.
+- **Async→sync device loading fallback** — `get_audio_nodes_async()` with 3s timeout; falls back to synchronous `get_audio_nodes_sync()` if async fails. New `get_audio_nodes_sync()` exported from `wp_monitor.js`.
+- **Icon cache rebuild in Flatpak build** — `gtk-update-icon-cache -f` added to manifest after icon install so about dialog finds the app icon.
+
 ### Documentation
-- **All docs updated** — README, CONTRIBUTING, CHANGELOG, docs/architecture.md reflect GJS-primary status and stream-aware features.
+- **All docs updated** — README, CONTRIBUTING, CHANGELOG, docs/architecture.md reflect GJS-primary status, Wp-optional architecture, and stream-aware features.

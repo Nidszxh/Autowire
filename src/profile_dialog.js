@@ -1,7 +1,14 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, GObject, GLib, Gio, Gtk } = imports.gi;
+
+const _is_flatpak = imports.gi.GLib.file_test('/.flatpak-info', imports.gi.GLib.FileTest.EXISTS);
+function _get_wpctl_cmd() {
+    return _is_flatpak ? ['flatpak-spawn', '--host', 'wpctl'] : ['wpctl'];
+}
+
 const config_mgr = imports.config_mgr;
+const wp_monitor = imports.wp_monitor;
 
 print('[ProfileDialog] module loaded');
 
@@ -17,53 +24,6 @@ const BT_PROFILES = [
     ['a2dp-sink-sbc', 'SBC (standard)'],
     ['handsfree-headset', 'HSP/HFP (call / mSBC)'],
 ];
-
-function _parse_nodes_from_wpctl(stdout) {
-    const results = [];
-    const seen_ids = new Set();
-    const lines = stdout.split('\n');
-
-    let in_sinks = false;
-    let in_sources = false;
-
-    for (const line of lines) {
-        const stripped = line.trim();
-        if (['Sinks:', '├─ Sinks:', '└─ Sinks:'].includes(stripped)) {
-            in_sinks = true;
-            in_sources = false;
-            continue;
-        }
-        if (['Sources:', '├─ Sources:', '└─ Sources:'].includes(stripped)) {
-            in_sources = true;
-            in_sinks = false;
-            continue;
-        }
-
-        if (!line.startsWith(' │')) {
-            in_sinks = false;
-            in_sources = false;
-            continue;
-        }
-
-        const m = line.match(/\s+│\s+(?:\*\s*)?(\d+)\.\s+(.+?)(?:\s+\[.*\])?$/);
-        if (!m) continue;
-
-        const node_id = parseInt(m[1], 10);
-        if (seen_ids.has(node_id)) continue;
-        seen_ids.add(node_id);
-
-        const description = m[2].trim();
-        const media_class = in_sinks ? 'Audio/Sink' : 'Audio/Source';
-
-        results.push({
-            id: node_id,
-            name: description,
-            description: description,
-            media_class: media_class,
-        });
-    }
-    return results;
-}
 
 var ProfileDialog = GObject.registerClass({
     Signals: {
@@ -102,18 +62,19 @@ var ProfileDialog = GObject.registerClass({
         this._cancel_button.add_css_class('flat');
         header_bar.pack_start(this._cancel_button);
 
-        this._apply_button = new Gtk.Button({ label: 'Apply Now', tooltip_text: 'Save and apply immediately' });
+        this._apply_button = new Gtk.Button({ label: 'Apply Now', tooltip_text: 'Save and apply immediately', valign: Gtk.Align.CENTER });
         this._apply_button.set_sensitive(false);
+        this._apply_button.add_css_class('flat');
         header_bar.pack_end(this._apply_button);
 
-        this._save_button = new Gtk.Button({ label: 'Save' });
+        this._save_button = new Gtk.Button({ label: 'Save', valign: Gtk.Align.CENTER });
         this._save_button.add_css_class('suggested-action');
         header_bar.pack_end(this._save_button);
 
         content.add_top_bar(header_bar);
 
         const scroll = new Gtk.ScrolledWindow({
-           vexpand: true,
+            vexpand: true,
             hscrollbar_policy: Gtk.PolicyType.NEVER,
             vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
         });
@@ -136,55 +97,49 @@ var ProfileDialog = GObject.registerClass({
         loading_box.append(new Gtk.Label({ label: 'Scanning audio devices…', halign: Gtk.Align.CENTER }));
         this._content_stack.add_named(loading_box, 'loading');
 
-        const form_box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12 });
+        const form_box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
+        const group = new Adw.PreferencesGroup();
 
-        this._name_entry = new Adw.EntryRow({ title: 'Profile Name', visible: true });
-        this._name_entry.set_size_request(-1, 48);
-        form_box.append(this._name_entry);
+        this._name_entry = new Adw.EntryRow({ title: 'Profile Name' });
+        group.add(this._name_entry);
 
         this._trigger_row = new Adw.ComboRow({
             title: 'Trigger Device',
             subtitle: 'Device that activates this profile',
-            visible: true,
             model: Gtk.StringList.new(['Scanning...']),
         });
-        this._trigger_row.set_size_request(-1, 56);
-        form_box.append(this._trigger_row);
+        group.add(this._trigger_row);
 
         this._sink_row = new Adw.ComboRow({
             title: 'Default Sink (Output)',
             subtitle: 'Audio output device',
-            visible: true,
             model: Gtk.StringList.new(['Scanning...']),
         });
-        this._sink_row.set_size_request(-1, 56);
-        form_box.append(this._sink_row);
+        group.add(this._sink_row);
 
         this._source_row = new Adw.ComboRow({
             title: 'Default Source (Input)',
             subtitle: 'Audio input device',
-            visible: true,
             model: Gtk.StringList.new(['Scanning...']),
         });
-        this._source_row.set_size_request(-1, 56);
-        form_box.append(this._source_row);
+        group.add(this._source_row);
 
         const bt_labels = BT_PROFILES.map(([, label]) => label);
-        this._bt_profile_row = new Adw.ComboRow({ title: 'Bluetooth Profile', subtitle: 'For wireless headsets only', visible: true });
+        this._bt_profile_row = new Adw.ComboRow({ title: 'Bluetooth Profile', subtitle: 'For wireless headsets only' });
         this._bt_profile_row.set_model(Gtk.StringList.new(bt_labels));
-        this._bt_profile_row.set_size_request(-1, 56);
-        form_box.append(this._bt_profile_row);
+        group.add(this._bt_profile_row);
 
-        this._bt_profile_call_row = new Adw.ComboRow({ title: 'Call BT Profile', subtitle: 'Bluetooth profile during calls (HSP/HFP for mic)', visible: true });
+        this._bt_profile_call_row = new Adw.ComboRow({ title: 'Call BT Profile', subtitle: 'Bluetooth profile during calls (HSP/HFP for mic)' });
         this._bt_profile_call_row.set_model(Gtk.StringList.new(bt_labels));
-        this._bt_profile_call_row.set_size_request(-1, 56);
-        form_box.append(this._bt_profile_call_row);
+        group.add(this._bt_profile_call_row);
 
-        this._auto_switch_row = new Adw.SwitchRow({ title: 'Auto-switch for calls', subtitle: 'Switch to call profile when mic is active', visible: true });
-        form_box.append(this._auto_switch_row);
+        this._auto_switch_row = new Adw.SwitchRow({ title: 'Auto-switch for calls', subtitle: 'Switch to call profile when mic is active' });
+        group.add(this._auto_switch_row);
 
-        this._active_row = new Adw.SwitchRow({ title: 'Active', subtitle: 'Enable this profile immediately when triggered', visible: true });
-        form_box.append(this._active_row);
+        this._active_row = new Adw.SwitchRow({ title: 'Active', subtitle: 'Enable this profile immediately when triggered' });
+        group.add(this._active_row);
+
+        form_box.append(group);
 
         this._content_stack.add_named(form_box, 'ready');
         main_box.append(this._content_stack);
@@ -196,18 +151,21 @@ var ProfileDialog = GObject.registerClass({
     }
 
     _load_devices_async() {
-        const proc = Gio.Subprocess.new(
-            ['wpctl', 'status'],
-            Gio.SubprocessFlags.STDOUT_PIPE
-        );
-        proc.communicate_utf8_async(null, null, (p, res) => {
-            try {
-                const [, stdout] = p.communicate_utf8_finish(res);
-                const nodes = _parse_nodes_from_wpctl(stdout || '');
+        let completed = false;
+        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+            if (!completed) {
+                print('[ProfileDialog] Async device loading timed out, falling back to sync');
+                const nodes = wp_monitor.get_audio_nodes_sync();
                 this._on_devices_loaded(nodes);
-            } catch (e) {
-                print(`[ProfileDialog] Error scanning devices: ${e}`);
-                this._content_stack.set_visible_child_name('ready');
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+
+        wp_monitor.get_audio_nodes_async(nodes => {
+            if (!completed) {
+                completed = true;
+                if (timeout_id > 0) GLib.source_remove(timeout_id);
+                this._on_devices_loaded(nodes);
             }
         });
     }

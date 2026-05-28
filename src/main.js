@@ -1,9 +1,16 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
-imports.gi.versions.Wp = '0.5';
-const { Adw, Gio, GLib, GObject, Gtk, Wp } = imports.gi;
 
-Wp.init(Wp.InitFlags.ALL);
+let Wp = null;
+try {
+    imports.gi.versions.Wp = '0.5';
+    Wp = imports.gi.Wp;
+    Wp.init(Wp.InitFlags.ALL);
+} catch (e) {
+    print('[Main] Wp typelib not available, running without Wp');
+}
+
+const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
 
 print('[Main] module loaded');
 

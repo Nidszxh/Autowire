@@ -1,5 +1,18 @@
-imports.gi.versions.Wp = '0.5';
-const { GLib, GObject, Gio, Wp } = imports.gi;
+const { GLib, GObject, Gio } = imports.gi;
+
+let Wp = null;
+try {
+    imports.gi.versions.Wp = '0.5';
+    Wp = imports.gi.Wp;
+} catch (e) {
+    print('[WpMonitor] Wp typelib not available, running in poll-only mode');
+}
+
+const _is_flatpak = imports.gi.GLib.file_test('/.flatpak-info', imports.gi.GLib.FileTest.EXISTS);
+function _get_wpctl_cmd() {
+    return _is_flatpak ? ['flatpak-spawn', '--host', 'wpctl'] : ['wpctl'];
+}
+
 
 print('[WpMonitor] module loaded');
 
@@ -29,6 +42,15 @@ var WpMonitor = GObject.registerClass({
     }
 
     start() {
+        if (!Wp) {
+            print('[WpMonitor] Wp not available, starting poll directly');
+            this._poll();
+            this._poll_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, _POLL_INTERVAL_MS, () => {
+                this._poll();
+                return GLib.SOURCE_CONTINUE;
+            });
+            return;
+        }
         this._core = Wp.Core.new(null, null, null);
         GObject.signal_connect(this._core, 'connected', () => this._on_core_connected());
         GObject.signal_connect(this._core, 'disconnected', () => {
@@ -65,6 +87,15 @@ var WpMonitor = GObject.registerClass({
         this._ready = false;
     }
 
+    _on_core_connected() {
+        print('[WpMonitor] Core connected, starting poll…');
+        this._poll();
+        this._poll_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, _POLL_INTERVAL_MS, () => {
+            this._poll();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
     get_audio_nodes() {
         return Object.values(this._nodes);
     }
@@ -76,15 +107,6 @@ var WpMonitor = GObject.registerClass({
     get_device_global_id(device_name) {
         const dev = this._devices[device_name];
         return dev ? dev['global_id'] : null;
-    }
-
-    _on_core_connected() {
-        print('[WpMonitor] Core connected, starting poll…');
-        this._poll();
-        this._poll_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, _POLL_INTERVAL_MS, () => {
-            this._poll();
-            return GLib.SOURCE_CONTINUE;
-        });
     }
 
     _poll() {
@@ -190,7 +212,7 @@ function _strip_tree_chars(s) {
 function _fetch_wpctl_status() {
     try {
         const [ok, stdout] = GLib.spawn_sync(
-            null, ['wpctl', 'status'],
+            null, _get_wpctl_cmd().concat(['status']),
             null, GLib.SpawnFlags.SEARCH_PATH, null
         );
         if (!ok) return '';
@@ -203,7 +225,7 @@ function _fetch_wpctl_status() {
 function _fetch_wpctl_status_async(callback) {
     try {
         const proc = Gio.Subprocess.new(
-            ['wpctl', 'status'],
+            _get_wpctl_cmd().concat(['status']),
             Gio.SubprocessFlags.STDOUT_PIPE
         );
 
@@ -301,12 +323,21 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
             in_sinks = false;
             continue;
         }
+        if (clean === 'Devices:' || clean === '├─ Devices:' || clean === '└─ Devices:' ||
+            clean === 'Filters:' || clean === '├─ Filters:' || clean === '└─ Filters:' ||
+            clean === 'Streams:' || clean === '├─ Streams:' || clean === '└─ Streams:') {
+            in_sinks = false;
+            in_sources = false;
+            continue;
+        }
 
         if (!line.startsWith(' │')) {
             in_sinks = false;
             in_sources = false;
             continue;
         }
+
+        if (!(in_sinks || in_sources)) continue;
 
         const m = line.match(/\s+│\s+(?:\*\s*)?(\d+)\.\s+(.+?)(?:\s+\[.*\])?$/);
         if (!m) continue;
@@ -335,7 +366,7 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
         try {
             const [ok2, inspect_stdout] = GLib.spawn_sync(
                 null,
-                ['wpctl', 'inspect', String(node_id)],
+                _get_wpctl_cmd().concat(['inspect', String(node_id)]),
                 null,
                 GLib.SpawnFlags.SEARCH_PATH,
                 null
@@ -404,11 +435,15 @@ function _fetch_devices_from_wpctl(status_text) {
     return results;
 }
 
+var get_audio_nodes_sync = function() {
+    return _fetch_nodes_from_wpctl();
+};
+
 function get_audio_nodes_async(callback) {
     if (typeof callback !== 'function') return;
     try {
         const proc = Gio.Subprocess.new(
-            ['wpctl', 'status'],
+            _get_wpctl_cmd().concat(['status']),
             Gio.SubprocessFlags.STDOUT_PIPE
         );
         proc.communicate_utf8_async(null, null, (p, res) => {

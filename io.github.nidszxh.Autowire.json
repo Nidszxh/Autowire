@@ -3,14 +3,16 @@
   "runtime": "org.gnome.Platform",
   "runtime-version": "50",
   "sdk": "org.gnome.Sdk",
+  "branch": "stable",
   "command": "autowire",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
-    "--socket=fallback-x11",
     "--socket=pulseaudio",
     "--talk-name=org.freedesktop.WirePlumber",
-    "--share=network"
+    "--system-talk-name=org.freedesktop.WirePlumber",
+    "--talk-name=org.freedesktop.Flatpak",
+    "--filesystem=xdg-config/autowire:create"
   ],
   "cleanup": [
     "/include",
@@ -21,41 +23,36 @@
   ],
   "modules": [
     {
-      "name": "autowire-wrapper",
+      "name": "autowire",
       "buildsystem": "simple",
       "build-commands": [
         "install -d /app/bin",
         "install -m 755 autowire-wrapper.sh /app/bin/autowire",
-        "install -m 755 autowire-daemon-wrapper.sh /app/bin/autowire-daemon"
-      ],
-      "sources": [
-        {
-          "type": "file",
-          "path": "autowire-wrapper.sh"
-        },
-        {
-          "type": "file",
-          "path": "autowire-daemon-wrapper.sh"
-        }
-      ]
-    },
-    {
-      "name": "autowire-sources",
-      "buildsystem": "simple",
-      "build-commands": [
+        "install -m 755 autowire-daemon-wrapper.sh /app/bin/autowire-daemon",
         "install -d /app/share/autowire",
-        "install -m 444 main.js /app/share/autowire/",
-        "install -m 444 window.js /app/share/autowire/",
-        "install -m 444 profile_dialog.js /app/share/autowire/",
-        "install -m 444 config_mgr.js /app/share/autowire/",
-        "install -m 444 daemon.js /app/share/autowire/",
-        "install -m 444 daemon_main.js /app/share/autowire/",
-        "install -m 444 wp_monitor.js /app/share/autowire/"
+        "install -m 444 src/main.js /app/share/autowire/",
+        "install -m 444 src/window.js /app/share/autowire/",
+        "install -m 444 src/profile_dialog.js /app/share/autowire/",
+        "install -m 444 src/config_mgr.js /app/share/autowire/",
+        "install -m 444 src/daemon.js /app/share/autowire/",
+        "install -m 444 src/daemon_main.js /app/share/autowire/",
+        "install -m 444 src/wp_monitor.js /app/share/autowire/",
+        "install -d /app/share/applications",
+        "install -d /app/share/metainfo",
+        "install -d /app/share/dbus-1/session-services",
+        "sed 's/@APPLICATION_ID@/io.github.nidszxh.Autowire/g' data/io.github.nidszxh.Autowire.desktop.in > /app/share/applications/io.github.nidszxh.Autowire.desktop",
+        "install -m 444 data/io.github.nidszxh.Autowire.metainfo.xml /app/share/metainfo/",
+        "install -m 444 data/io.github.nidszxh.Autowire.service /app/share/dbus-1/session-services/",
+        "install -d /app/share/icons/hicolor/scalable/apps",
+        "install -d /app/share/icons/hicolor/symbolic/apps",
+        "install -m 444 data/icons/hicolor/scalable/apps/io.github.nidszxh.Autowire.svg /app/share/icons/hicolor/scalable/apps/",
+        "install -m 444 data/icons/hicolor/symbolic/apps/io.github.nidszxh.Autowire-symbolic.svg /app/share/icons/hicolor/symbolic/apps/",
+        "gtk-update-icon-cache -f /app/share/icons/hicolor || true"
       ],
       "sources": [
         {
           "type": "dir",
-          "path": "src"
+          "path": "."
         }
       ]
     }

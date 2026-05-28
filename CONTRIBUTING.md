@@ -52,8 +52,8 @@ All code is pure GJS (no Python).
 └─────────────────────────┘             └─────────────────────────┘
 ```
 
-- **UI** (`src/main.js`) requires GTK, Adwaita, and WirePlumber GObject bindings.
-- **Daemon** (`src/daemon_main.js`) imports only `GLib`, `Gio`, `config_mgr`, and `daemon`. No GTK. This is intentional — the daemon must run in headless environments.
+- **UI** (`src/main.js`) requires GTK and Adwaita. WirePlumber typelib is optional — falls back to poll-only mode when unavailable (e.g. in Flatpak with `org.gnome.Platform//50`).
+- **Daemon** (`src/daemon_main.js`) imports only `GLib`, `Gio`, `GLibUnix`, `config_mgr`, and `daemon`. No GTK. This is intentional — the daemon must run in headless environments. WirePlumber typelib is also optional here.
 
 When adding features:
 - Routing logic goes in `daemon.js`

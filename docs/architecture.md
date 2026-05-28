@@ -30,8 +30,8 @@ Autowire is two separate processes that communicate only through a shared JSON f
 
 | Process | Entry point (GJS) | Dependencies |
 |---|---|---|
-| **UI** | `gjs -I src/ src/main.js` | GTK 4, Adwaita, WirePlumber |
-| **Daemon** | `gjs -I src/ src/daemon_main.js` | GLib only (no GTK, no Adw) |
+| **UI** | `gjs -I src/ src/main.js` | GTK 4, Adwaita (Wp optional — falls back to poll-only) |
+| **Daemon** | `gjs -I src/ src/daemon_main.js` | GLib only (no GTK, no Adw, Wp optional) |
 
 No build step required — the UI builds its widgets programmatically.
 
@@ -81,9 +81,13 @@ Poll-based `Wp.Core` wrapper. GJS Wp bindings cannot read proxy properties, so p
 - `get_device_global_id(name)` → `number | null`
 - `get_audio_nodes()` → `Array<Object>`
 
-Also exports `get_audio_nodes_sync(callback?)`:
-- Uses `wpctl status` + `wpctl inspect` for each node
-- Returns `Array<Object>` synchronously, or fires callback via `GLib.idle_add` if provided
+Also exports `get_audio_nodes_sync()`:
+- Synchronous version using `wpctl status` + `wpctl inspect` for each node
+- Returns `Array<Object>` directly (blocks ~0.2s)
+
+Also exports `get_audio_nodes_async(callback)`:
+- Same data via `Gio.Subprocess.communicate_utf8_async()` (non-blocking)
+- Calls `callback(nodes)` on completion, or `callback([])` on error
 
 ### `daemon_main.js`
 Daemon entry point (GLib only, zero GTK imports).
@@ -112,8 +116,9 @@ GTK UI entry point.
 `ProfileDialog` — `Adw.Dialog` for create/edit.
 
 - Shows loading spinner immediately (async device fetch)
-- Device lists loaded via `GLib.idle_add` → `get_audio_nodes_sync()` → `_on_devices_loaded()`
-- `_on_devices_loaded()` sets `Gtk.StringList` models on ComboRows, then schedules an idle callback for `_validate()` + `_prefill()` (deferred until model change propagates)
+- Device lists loaded via `get_audio_nodes_async()` with a 3s timeout; falls back to synchronous `get_audio_nodes_sync()` on timeout
+- All `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) are children of a single `Adw.PreferencesGroup` — required for ComboRow click handling
+- `_on_devices_loaded(nodes)` sets `Gtk.StringList` models on ComboRows, validates, and prefills if editing
 - `_prefill(profile)` — pre-selects trigger/sink/source/BT-profile/Call-BT-profile/auto-switch based on saved values
 - `_validate()` enables Save only when name is non-empty AND trigger is selected
 - `_on_save()` reads all selections including `bt_profile_call` and `auto_switch`, calls `config_mgr.save_profile()`, emits `profile-saved`, closes
@@ -128,14 +133,17 @@ GTK UI entry point.
  User opens ProfileDialog
      │
      ▼
- GLib.idle_add → get_audio_nodes_sync() via wpctl
+ get_audio_nodes_async() — with 3s timeout
      │
-     ▼
+     ├─ succeeds → _on_devices_loaded(nodes)
+     │
+     └─ times out → get_audio_nodes_sync() → _on_devices_loaded(nodes)
+           │
+           ▼
  _on_devices_loaded()
-     ├─ ComboRow models set
-     └─ GLib.idle_add → _on_devices_loaded_idle()
-           └─ _validate() + _prefill()
-
+     ├─ ComboRow models set (all rows inside PreferencesGroup)
+     └─ _validate() + _prefill()
+ 
  User clicks Save
      │
      ▼
@@ -254,7 +262,7 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
 ```
  daemon_main.js starts
      │
-     ├─ Wp.init(Wp.InitFlags.ALL)
+     ├─ try: Wp.init(Wp.InitFlags.ALL) — fallback silently if typelib missing
      ├─ build_monitor() → WpMonitor
      ├─ monitor.start() → polls begin
      ├─ FileMonitor installed on profiles.json

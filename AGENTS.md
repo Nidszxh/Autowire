@@ -9,7 +9,7 @@ Libadwaita/GTK4 app + headless daemon for automated PipeWire/WirePlumber audio p
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                        UI  PROCESS                           │
-│  src/main.js  —  GTK4 + Adwaita + Wp                        │
+│  src/main.js  —  GTK4 + Adwaita (Wp optional)                        │
 │                                                            │
 │  ┌────────────┐   ┌────────────┐   ┌──────────────────┐    │
 │  │  Window     │   │  Profile   │   │   ConfigMgr      │    │
@@ -163,6 +163,12 @@ gjs -I src/ src/daemon_main.js
 # System install via Meson (launches GJS)
 ninja -C _build && ./_build/src/autowire
 
+# Flatpak build & run
+flatpak-builder --force-clean --user --install _flatpak_build io.github.nidszxh.Autowire.json && flatpak run io.github.nidszxh.Autowire
+
+# Flatpak daemon
+flatpak run io.github.nidszxh.Autowire.Daemon
+
 # Daemon logs
 journalctl --user -u io.github.nidszxh.Autowire.Daemon -f
 systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
@@ -192,9 +198,12 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 - **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 2000ms rate limit.
 - **Polling:** 3s interval, 5s routing cooldown (per node name), 3s capture debounce.
 - **BT card-aware matching** — `_get_active_profile_for()` falls back to same-`bluez_card.MAC` match when exact trigger match fails. `_any_active_capture_for()` checks BT card siblings for capture state.
+- **`Adw.ComboRow` needs `Adw.PreferencesGroup`** — `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) are non-interactive unless added to an `Adw.PreferencesGroup` parent.
+- **`Wp` import optional everywhere** — `main.js`, `daemon_main.js`, and `wp_monitor.js` all wrap the Wp typelib import in try-catch. Flatpak (org.gnome.Platform//50) lacks `Wp-0.5` typelib, so all modules fall back to poll-only / sync mode.
+- **Profile dialog sync fallback** — `profile_dialog.js` tries `get_audio_nodes_async()` first with a 3s timeout; on timeout it falls back to synchronous `get_audio_nodes_sync()` to ensure device lists always populate.
 
 ## Known Issues
 
 - **No GJS test suite** — all 60 Python tests were removed with the stale Python code.
-- **`get_audio_nodes_sync()` blocks UI ~0.2s** — uses `GLib.idle_add` + sync subprocess.
+- **`get_audio_nodes_sync()` blocks UI ~0.2s** — sync subprocess call. Profile dialog falls back to this after 3s async timeout.
 - **No subprocess timeout** — GJS `GLib.spawn_sync` doesn't support timeout unlike Python's `subprocess.run(timeout=5)`.

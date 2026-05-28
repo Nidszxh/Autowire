@@ -22,13 +22,13 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 
 ## Requirements
 
-| Dependency | Version |
-|---|---|
-| GNOME Platform | 48+ |
-| GTK | 4.0 |
-| Libadwaita | 1.5+ |
-| WirePlumber | 0.5+ |
-| GJS | 1.80+ |
+| Dependency | Version | Notes |
+|---|---|---|---|
+| GNOME Platform | 48+ | |
+| GTK | 4.0 | |
+| Libadwaita | 1.5+ | |
+| WirePlumber | 0.5+ | Optional for UI — typelib missing on Flatpak `//50` runtime, falls back to poll-only |
+| GJS | 1.80+ | |
 
 
 ---
@@ -56,6 +56,9 @@ No build step required — builds its UI programmatically.
 flatpak-builder --force-clean --user --install _flatpak_build \
     io.github.nidszxh.Autowire.json
 flatpak run io.github.nidszxh.Autowire
+
+# Flatpak daemon
+flatpak run io.github.nidszxh.Autowire.Daemon
 ```
 
 ---
