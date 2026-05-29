@@ -42,6 +42,11 @@ All notable changes to Autowire are documented here.
 - **Gtk.Switch active in constructor** — avoids spurious `notify::active` emissions.
 - **AboutDialog** — added with version, license, and links.
 
+### Capture-aware switching fixes
+- **`check_and_route_device` no longer checks capture state** — initial routing always uses `bt_profile` (AAC). Capture-aware switching (`bt_profile_call` / HSP/HFP) is handled exclusively by `handle_capture_started`/`handle_capture_stopped`, which are triggered by real capture stream transitions. This prevents false/stale capture detections from keeping the device stuck in HSP/HFP.
+- **`ready` handler re-applies capture profiles** — after initial routing, `daemon_main.js` now iterates `monitor.get_capture_nodes()` and calls `handle_capture_started` for each, ensuring active captures at startup correctly switch to `bt_profile_call`.
+- **New `get_capture_nodes()` method** on `WpMonitor` — returns node names with active capture counts > 0.
+
 ### Flatpak & GJS compatibility fixes
 - **Wp typelib optional everywhere** — `main.js`, `daemon_main.js`, `wp_monitor.js` wrap Wp import/init in try-catch. Flatpak `org.gnome.Platform//50` lacks `Wp-0.5` typelib; all modules fall back to poll-only / sync mode.
 - **Profile dialog combo rows fixed** — all `Adw.PreferencesRow` widgets (EntryRow, ComboRow, SwitchRow) now inside an `Adw.PreferencesGroup` (required for ComboRow click handling). Header bar buttons compacted with `flat` + `valign: CENTER`.

@@ -109,6 +109,12 @@ var WpMonitor = GObject.registerClass({
         return dev ? dev['global_id'] : null;
     }
 
+    get_capture_nodes() {
+        return Object.entries(this._capture_counts)
+            .filter(([, count]) => count > 0)
+            .map(([name]) => name);
+    }
+
     _poll() {
         if (this._polling) return;
         this._polling = true;

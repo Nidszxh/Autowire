@@ -83,7 +83,7 @@ daemon_main.js:main()
   │                       └─ 0→1: emit 'capture-started'
   │                       └─ 1→0: emit 'capture-stopped'
   │
-  ├─► on 'ready' → route already-connected nodes
+  ├─► on 'ready' → route already-connected nodes, then re-apply call profiles for active captures
   │
   ├─► Gio.File.new_for_path(CONFIG_FILE).monitor()
   │     └─ on change → re-route all tracked nodes

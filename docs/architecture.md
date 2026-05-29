@@ -270,6 +270,8 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
      └─ on 'ready' event:
            for each node in monitor.get_audio_nodes():
                check_and_route_device(node_name, monitor)
+           for each node in monitor.get_capture_nodes():
+               handle_capture_started(node_name, monitor)
 ```
 
 ---

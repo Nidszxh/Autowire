@@ -1,4 +1,10 @@
 const { GLib, Gio } = imports.gi;
+
+const _is_flatpak = imports.gi.GLib.file_test('/.flatpak-info', imports.gi.GLib.FileTest.EXISTS);
+function _get_wpctl_cmd() {
+    return _is_flatpak ? ['flatpak-spawn', '--host', 'wpctl'] : ['wpctl'];
+}
+
 const config_mgr = imports.config_mgr;
 const wp_monitor = imports.wp_monitor;
 
@@ -71,7 +77,7 @@ function _resolve_node_id(node_name, monitor) {
 
     let status_text;
     try {
-        const [ok, stdout] = _spawn_sync_with_timeout(['wpctl', 'status']);
+        const [ok, stdout] = _spawn_sync_with_timeout(_get_wpctl_cmd().concat(['status']));
         if (!ok) return null;
         status_text = new TextDecoder().decode(stdout);
     } catch (e) {
@@ -113,7 +119,7 @@ function _resolve_node_id(node_name, monitor) {
 
     for (const id of candidate_ids) {
         try {
-            const [ok, out] = _spawn_sync_with_timeout(['wpctl', 'inspect', String(id)]);
+            const [ok, out] = _spawn_sync_with_timeout(_get_wpctl_cmd().concat(['inspect', String(id)]));
             if (!ok) continue;
             const text = new TextDecoder().decode(out);
             for (const iline of text.split('\n')) {
@@ -141,7 +147,7 @@ function set_system_default(node_name, monitor) {
         return false;
     }
     try {
-        const [ok, stdout, stderr, exitStatus] = _spawn_sync_with_timeout(['wpctl', 'set-default', String(node_id)]);
+        const [ok, stdout, stderr, exitStatus] = _spawn_sync_with_timeout(_get_wpctl_cmd().concat(['set-default', String(node_id)]));
         if (ok && exitStatus === 0) {
             print(`[Daemon] Default set to: ${node_name} (id=${node_id})`);
             return true;
@@ -175,7 +181,7 @@ function set_bt_profile(device_global_id, profile_name) {
         return false;
     }
     try {
-        const [ok, stdout, stderr, exitStatus] = _spawn_sync_with_timeout(['wpctl', 'set-profile', String(device_global_id), profile_name]);
+        const [ok, stdout, stderr, exitStatus] = _spawn_sync_with_timeout(_get_wpctl_cmd().concat(['set-profile', String(device_global_id), profile_name]));
         if (ok && exitStatus === 0) {
             print(`[Daemon] BT profile set: device=${device_global_id} profile=${profile_name}`);
             return true;
@@ -311,9 +317,6 @@ function check_and_route_device(connected_node_name, monitor, force) {
         const sink = actions['default_sink'] || '';
         const source = actions['default_source'] || '';
         let bt_profile = actions['bt_profile'] || '';
-        if (actions['auto_switch'] && _any_active_capture_for(connected_node_name)) {
-            bt_profile = actions['bt_profile_call'] || bt_profile;
-        }
 
         if (sink) {
             set_system_default(sink, monitor);

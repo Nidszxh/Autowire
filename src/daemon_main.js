@@ -1,5 +1,4 @@
-imports.gi.versions.Wp = '0.5';
-const { GLib, Gio, Wp } = imports.gi;
+const { GLib, Gio } = imports.gi;
 const GLibUnix = imports.gi.GLibUnix;
 const config_mgr = imports.config_mgr;
 const daemon = imports.daemon;
@@ -7,7 +6,13 @@ const daemon = imports.daemon;
 const SIGTERM = 15;
 const SIGINT = 2;
 
-Wp.init(Wp.InitFlags.ALL);
+try {
+    imports.gi.versions.Wp = '0.5';
+    const Wp = imports.gi.Wp;
+    Wp.init(Wp.InitFlags.ALL);
+} catch (e) {
+    print('[Daemon] Wp typelib not available, running without Wp.Core');
+}
 
 print('[Daemon] module loaded');
 
@@ -67,6 +72,10 @@ function main() {
         print('[Daemon] Routing already-connected devices…');
         for (const node of monitor.get_audio_nodes()) {
             daemon.check_and_route_device(node['name'] || '', monitor);
+        }
+        print('[Daemon] Checking for active captures…');
+        for (const node_name of monitor.get_capture_nodes()) {
+            daemon.handle_capture_started(node_name, monitor);
         }
     });
 
