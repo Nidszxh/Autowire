@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.nidszxh.Autowire</id>
+  <icon type="stock">io.github.nidszxh.Autowire</icon>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
@@ -27,6 +28,7 @@
       <li>Event-driven daemon — near-zero resource usage at idle</li>
       <li>Clean Libadwaita interface that matches GNOME Settings</li>
       <li>Profiles stored locally in a simple JSON file</li>
+      <li>Auto-switch for calls — daemon detects active mic streams and switches between HSP/HFP and A2DP automatically</li>
     </ul>
   </description>
 
@@ -40,27 +42,30 @@
     <name>nidszxh</name>
   </developer>
 
+  <update_contact>nids.since2005@gmail.com</update_contact>
+
   <branding>
     <color type="primary" scheme_preference="light">#1AADA8</color>
     <color type="primary" scheme_preference="dark">#1A5276</color>
   </branding>
 
-  <!--
-  TODO: Add 16:9 screenshots before Flathub submission
   <screenshots>
     <screenshot type="default">
       <caption>The main profile list showing configured audio profiles</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/main.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/1.png</image>
     </screenshot>
     <screenshot>
       <caption>Creating a new profile with live device selection</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/new-profile.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/2.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Editing a profile</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/3.png</image>
     </screenshot>
   </screenshots>
-  -->
 
   <releases>
-    <release version="0.1.0" date="2026-05-17">
+    <release version="0.1.0" date="2024-05-17">
       <description>
         <p>Initial release of Autowire.</p>
         <ul>

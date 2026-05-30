@@ -89,9 +89,9 @@ On detecting an `input_*` stream targeting the device:
 
 If a new capture starts during debounce, the timer is cancelled. This handles push-to-talk gaps.
 
-**BT card bridging:** Capture events fire on `bluez_input.XX.*` but profiles are keyed by `bluez_output.XX.*`. The daemon's `_get_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC`. `_any_active_capture_for()` checks whether any node sharing the same BT card has an active capture. Both functions live in `daemon.js`.
+**BT card bridging:** Capture events fire on `bluez_input.XX.*` but profiles are keyed by `bluez_output.XX.*`. The daemon's `_get_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC`. Capture state is tracked via `_active_capture_nodes` Set in `daemon.js`.
 
-`check_and_route_device()` also checks `_any_active_capture_for()` at initial routing time — if a device connects while a call is already active, it uses `bt_profile_call` instead of `bt_profile`.
+`check_and_route_device()` always uses `bt_profile` for initial routing. Capture-aware switching between `bt_profile` and `bt_profile_call` is handled separately by `handle_capture_started()` / `handle_capture_stopped()`, driven by actual capture stream transitions.
 
 ## Code Style
 

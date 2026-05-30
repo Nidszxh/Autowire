@@ -218,14 +218,6 @@ function _bt_card_equal(a, b) {
     return ca === cb;
 }
 
-function _any_active_capture_for(node_name) {
-    if (_active_capture_nodes.has(node_name)) return true;
-    for (const captured of _active_capture_nodes) {
-        if (_bt_card_equal(captured, node_name)) return true;
-    }
-    return false;
-}
-
 function _get_active_profile_for(node_name) {
     let profile = config_mgr.get_active_profile(node_name);
     if (profile) {

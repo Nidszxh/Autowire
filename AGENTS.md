@@ -107,9 +107,6 @@ check_and_route_device(node_name, monitor?)
   │        to find node.name → numeric ID
   │   └─ wpctl set-default <numeric_id>
   │
-  ├─ if bt_profile AND _any_active_capture_for(name):
-  │     use bt_profile_call instead of bt_profile
-  │
   └─ if bt_profile:
        _bt_card_name(node) → bluez_card.XX (MAC preserved)
        monitor.get_device_global_id(card) → numeric PW global ID
@@ -197,7 +194,7 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 - **Atomic writes** — `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.rename()`.
 - **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 2000ms rate limit.
 - **Polling:** 3s interval, 5s routing cooldown (per node name), 3s capture debounce.
-- **BT card-aware matching** — `_get_active_profile_for()` falls back to same-`bluez_card.MAC` match when exact trigger match fails. `_any_active_capture_for()` checks BT card siblings for capture state.
+- **BT card-aware matching** — `_get_active_profile_for()` falls back to same-`bluez_card.MAC` match when exact trigger match fails. Capture state tracked via `_active_capture_nodes` Set.
 - **`Adw.ComboRow` needs `Adw.PreferencesGroup`** — `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) are non-interactive unless added to an `Adw.PreferencesGroup` parent.
 - **`Wp` import optional everywhere** — `main.js`, `daemon_main.js`, and `wp_monitor.js` all wrap the Wp typelib import in try-catch. Flatpak (org.gnome.Platform//50) lacks `Wp-0.5` typelib, so all modules fall back to poll-only / sync mode.
 - **Profile dialog sync fallback** — `profile_dialog.js` tries `get_audio_nodes_async()` first with a 3s timeout; on timeout it falls back to synchronous `get_audio_nodes_sync()` to ensure device lists always populate.

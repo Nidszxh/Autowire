@@ -43,6 +43,9 @@ function _watch_config_file(monitor) {
             for (const node of monitor.get_audio_nodes()) {
                 daemon.check_and_route_device(node['name'] || '', monitor, true);
             }
+            for (const node_name of monitor.get_capture_nodes()) {
+                daemon.handle_capture_started(node_name, monitor);
+            }
         }
     });
     _config_monitor.set_rate_limit(500);

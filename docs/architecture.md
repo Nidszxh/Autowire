@@ -58,12 +58,11 @@ Core routing logic + stream-aware capture switching.
 
 - `set_system_default(node_name)` → `boolean` — resolves node name to numeric PW ID via `wpctl inspect`, then `wpctl set-default <id>`. If `node_name` is empty and device is a BT headset, auto-discovers the sink/source from the `bluez_card.MAC`.
 - `set_bt_profile(device_global_id, profile_name)` → `boolean` — `wpctl set-profile <id> <profile>`
-- `check_and_route_device(node_name, monitor)` → `boolean` — loads profiles, **skips any where `is_active != true`**, checks `_any_active_capture_for()` across BT card siblings, fires routing actions on the first matching active profile
+- `check_and_route_device(node_name, monitor)` → `boolean` — loads profiles, **skips any where `is_active != true`**, fires routing actions on the first matching active profile. Initial routing always uses `bt_profile`; capture-aware switching is handled by `handle_capture_started`/`handle_capture_stopped`
 - `handle_capture_started(node_name, monitor)` — cancels restore timer, routes BT mic as default source, switches to `bt_profile_call`
 - `handle_capture_stopped(node_name, monitor)` — starts 3s debounce, on expiry restores `bt_profile` and re-routes BT sink as default
 - `build_monitor()` → `WpMonitor` — creates monitor wired with `node-added`, `device-added`, `capture-started`, `capture-stopped` signals
 - `_get_active_profile_for(node_name)` → `Object | null` — tries exact `trigger_device_name == node_name` match, then falls back to BT card match: finds any active profile whose trigger shares the same `bluez_card.MAC`
-- `_any_active_capture_for(node_name)` → `boolean` — checks whether any node sharing the same `bluez_card.MAC` has an active capture (bridges the gap between `bluez_input.XX.*` capture events and `bluez_output.XX.*` profile triggers)
 - `_bt_card_equal(a, b)` → `boolean` — compares two `bluez_card.XX` names for equality
 - `_bt_card_name(node_name)` → `string | null` — derives `bluez_card.XX_XX_...` from `bluez_output.XX_XX_...` or `bluez_input.XX_XX_...`
 - `_resolve_node_id(node_name)` → `number | null` — parses `wpctl status` for numeric IDs, `wpctl inspect`s each to match `node.name`
@@ -176,9 +175,8 @@ GTK UI entry point.
      │
      ├── if no profile found → skip
      │
-     ├── if bt_profile AND _any_active_capture_for(node_name):
-     │       use bt_profile_call instead
-     │
+      ├── (capture-aware switching is handled separately by handle_capture_started / handle_capture_stopped)
+      │
      ├── if default_sink is empty AND bt headset:
      │       auto-discover BT sink from bluez_card.MAC
      │       → wpctl set-default <sink_id>
@@ -342,5 +340,5 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
 - **Signal handling** uses `GLibUnix.signal_add()` with numeric signals (GJS 1.80+ API, not `GLib.unix_signal_add`).
 - **capture-started/stopped signals** only fire on 0→1 / 1→0 transitions (never repeated for same state). Daemon can safely react to each event once.
 - **BT card-aware profile matching** — capture events fire on `bluez_input.XX.MAC` but profiles are keyed by `bluez_output.XX.MAC`. The daemon's `_get_active_profile_for()` tries the exact trigger match first; if that fails, it extracts the `bluez_card.MAC` from both the connecting node and all profile triggers, and returns the first matching active profile on the same BT card. This ensures that mic activation via `bluez_input.XX.handsfree-headset` correctly finds a profile configured for `bluez_output.XX.a2dp-sink`.
-- **`_any_active_capture_for(node_name)`** checks across BT card siblings — if `node_name` is `bluez_output.XX.a2dp-sink`, it checks whether `bluez_input.XX.*` has an active capture. This bridges the gap between output-keyed routing and input-keyed capture tracking.
+- **`_active_capture_nodes` Set** tracks which nodes have active captures, indexed by node name. `handle_capture_started` adds to it; `handle_capture_stopped` removes after debounce. This bridges the gap between output-keyed routing and input-keyed capture tracking.
 - **Auto-route BT input/output** — when a profile has `bt_profile` set but empty `default_sink`/`default_source`, the daemon auto-discovers the corresponding BT sink and source node names by scanning all nodes, finding ones that share the same `bluez_card.MAC`, and routing both. This removes the need for users to manually select sink/source for BT profiles.
