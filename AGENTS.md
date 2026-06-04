@@ -58,6 +58,7 @@ src/                    # Production GJS
   daemon_main.js        # Daemon main loop (GLib + Gio + Wp, zero GTK)
   wp_monitor.js         # Poll-based WpCore wrapper + capture detection
   config_mgr.js         # Atomic JSON CRUD for profiles.json
+  utils.js              # Shared helpers (is_flatpak, wpctl/pactl commands)
 data/                   # System integration files
   *.service, *.desktop.in, *.metainfo.xml
 ```
@@ -70,23 +71,22 @@ daemon_main.js:main()
   │
   ├─► daemon.build_monitor() → new WpMonitor()
   │     ├─ node-added → check_and_route_device(name, mon)
-  │     ├─ device-added → log if bluez_card.*
-  │     ├─ capture-started → handle_capture_started(name, mon)
-  │     └─ capture-stopped → handle_capture_stopped(name, mon)
+  │     └─ device-added → if bluez_card.*: activate_bt_card(gid, name, mon)
+  │                          then re-apply capture routing for active captures
   │
   ├─► monitor.start()
   │     └─ _core.connect() → _on_core_connected()
   │           └─ _poll() every 3s
+  │                 ├─ _poll_devices() — Devices section (populates _devices FIRST)
   │                 ├─ _poll_nodes()   — wpctl status + inspect
-  │                 ├─ _poll_devices() — Devices section
   │                 └─ _poll_streams() — Streams → capture detection
   │                       └─ 0→1: emit 'capture-started'
   │                       └─ 1→0: emit 'capture-stopped'
   │
-  ├─► on 'ready' → route already-connected nodes, then re-apply call profiles for active captures
+  ├─► on 'ready' → route already-connected nodes (force=true), re-apply call profiles for active captures, THEN connect capture-started/stopped
   │
   ├─► Gio.File.new_for_path(CONFIG_FILE).monitor()
-  │     └─ on change → re-route all tracked nodes
+  │     └─ on change → re-route all tracked nodes (force=true), re-apply call profiles
   │
   └─► GLib.MainLoop.run()
 
@@ -180,6 +180,7 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 - Uniqueness: `(trigger_device_name, profile_name)`.
 - `is_active`: only one per trigger can be true.
 - Valid `bt_profile` values: `a2dp-sink-aac`, `a2dp-sink-ldac`, `a2dp-sink-aptx`, `a2dp-sink-aptx_hd`, `a2dp-sink-sbc_xq`, `a2dp-sink-sbc`, `handsfree-headset`, or `''`.
+- `bt_profile_call` accepts `handsfree-headset` or `headset-head-unit`; the daemon substitutes between them based on what the card exposes (`_HSP_HFP` ladder).
 
 ## GJS Quirks
 
@@ -187,12 +188,11 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 - **`Adw.PreferencesGroup` title via constructor broken** — always use `set_title()` after construction.
 - **`Adw.AlertDialog` needs object constructor** — `new Adw.AlertDialog({heading, body})`.
 - **`GLibUnix.signal_add()`** (not deprecated `GLib.unix_signal_add`) for SIGTERM/SIGINT.
-- **`Wp.Properties()` constructor raises boxed-type error** — use `Wp.Properties.new_empty()`.
 - **Numeric ID resolution** — `wpctl set-default` needs numeric PW node ID. `_resolve_node_id()` parses `wpctl status` for candidate IDs, `wpctl inspect`s each to match `node.name`.
 - **Device global ID** — `wpctl set-profile` needs PW global ID. Use `monitor.get_device_global_id('bluez_card.XX_XX_...')`.
 - **BT node→card mapping** — `bluez_output.XX_XX_...` → `bluez_card.XX_XX_...` (MAC preserved).
 - **Atomic writes** — `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.rename()`.
-- **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 2000ms rate limit.
+- **Config watcher** — `Gio.File.new_for_path(path).monitor()` with 500ms rate limit.
 - **Polling:** 3s interval, 5s routing cooldown (per node name), 3s capture debounce.
 - **BT card-aware matching** — `_get_active_profile_for()` falls back to same-`bluez_card.MAC` match when exact trigger match fails. Capture state tracked via `_active_capture_nodes` Set.
 - **`Adw.ComboRow` needs `Adw.PreferencesGroup`** — `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) are non-interactive unless added to an `Adw.PreferencesGroup` parent.
@@ -201,6 +201,5 @@ systemctl --user restart io.github.nidszxh.Autowire.Daemon.service
 
 ## Known Issues
 
-- **No GJS test suite** — all 60 Python tests were removed with the stale Python code.
+- **GJS unit tests** exist in `tests/` (`test_daemon.js`, `test_config_mgr.js`, `test_wp_monitor.js`) — run via `tests/test.sh`. Tests are self-contained (no GI imports beyond GLib) and cover core logic: BT card name parsing, stream capture detection, config migration/set-active/reorder logic.
 - **`get_audio_nodes_sync()` blocks UI ~0.2s** — sync subprocess call. Profile dialog falls back to this after 3s async timeout.
-- **No subprocess timeout** — GJS `GLib.spawn_sync` doesn't support timeout unlike Python's `subprocess.run(timeout=5)`.

@@ -1,4 +1,5 @@
 const { GLib, GObject, Gio } = imports.gi;
+const { get_wpctl_cmd } = imports.utils;
 
 let Wp = null;
 try {
@@ -6,11 +7,6 @@ try {
     Wp = imports.gi.Wp;
 } catch (e) {
     print('[WpMonitor] Wp typelib not available, running in poll-only mode');
-}
-
-const _is_flatpak = imports.gi.GLib.file_test('/.flatpak-info', imports.gi.GLib.FileTest.EXISTS);
-function _get_wpctl_cmd() {
-    return _is_flatpak ? ['flatpak-spawn', '--host', 'wpctl'] : ['wpctl'];
 }
 
 
@@ -22,8 +18,8 @@ var WpMonitor = GObject.registerClass({
     Signals: {
         'node-added': { param_types: [GObject.TYPE_STRING, GObject.TYPE_STRING, GObject.TYPE_STRING] },
         'node-removed': { param_types: [GObject.TYPE_STRING] },
-        'device-added': { param_types: [GObject.TYPE_STRING, GObject.TYPE_STRING, GObject.TYPE_INT] },
-        'device-removed': { param_types: [GObject.TYPE_STRING] },
+        'device-added': { param_types: [GObject.TYPE_STRING, GObject.TYPE_STRING, GObject.TYPE_INT, GObject.TYPE_STRING] },
+        'device-removed': { param_types: [GObject.TYPE_STRING, GObject.TYPE_STRING, GObject.TYPE_INT, GObject.TYPE_STRING] },
         'capture-started': { param_types: [GObject.TYPE_STRING] },
         'capture-stopped': { param_types: [GObject.TYPE_STRING] },
         'ready': {},
@@ -101,7 +97,12 @@ var WpMonitor = GObject.registerClass({
     }
 
     get_devices() {
-        return Object.values(this._devices);
+        const seen = new Set();
+        return Object.values(this._devices).filter(d => {
+            if (seen.has(d['global_id'])) return false;
+            seen.add(d['global_id']);
+            return true;
+        });
     }
 
     get_device_global_id(device_name) {
@@ -124,9 +125,9 @@ var WpMonitor = GObject.registerClass({
                 print('[WpMonitor] Poll skipped: wpctl status failed or timed out');
                 return;
             }
-            this._poll_nodes(status_text);
             this._poll_devices(status_text);
             this._poll_streams(status_text);
+            this._poll_nodes(status_text);
             if (!this._ready) {
                 this._ready = true;
                 this.emit('ready');
@@ -139,7 +140,6 @@ var WpMonitor = GObject.registerClass({
         const current_names = new Set(current.map(n => n['name']));
         const prev_names = new Set(Object.keys(this._nodes));
 
-        this._desc_to_name = {};
         for (const node of current) {
             this._desc_to_name[node['description']] = node['name'];
             this._desc_to_name[node['name']] = node['name'];
@@ -163,22 +163,32 @@ var WpMonitor = GObject.registerClass({
 
     _poll_devices(status_text) {
         const current = _fetch_devices_from_wpctl(status_text);
-        const current_names = new Set(current.map(d => d['name']));
+        const current_names = new Set();
+        for (const dev of current) {
+            current_names.add(dev['name']);
+            current_names.add(dev['pw_name']);
+        }
         const prev_names = new Set(Object.keys(this._devices));
 
         for (const dev of current) {
             if (!prev_names.has(dev['name'])) {
                 this._devices[dev['name']] = dev;
-                print(`[WpMonitor] Device added: ${dev['name']} global_id=${dev['global_id']}`);
-                this.emit('device-added', dev['name'], dev['description'], dev['global_id']);
+                this._devices[dev['pw_name']] = dev;
+                print(`[WpMonitor] Device added: ${dev['name']} (${dev['pw_name']}) global_id=${dev['global_id']}`);
+                this.emit('device-added', dev['name'], dev['description'], dev['global_id'], dev['pw_name']);
             }
         }
 
+        const removed_ids = new Set();
         for (const name of prev_names) {
             if (!current_names.has(name)) {
+                const dev = this._devices[name];
+                if (dev && !removed_ids.has(dev['global_id'])) {
+                    removed_ids.add(dev['global_id']);
+                    print(`[WpMonitor] Device removed: ${dev['name']}`);
+                    this.emit('device-removed', dev['name'], dev['description'], dev['global_id'], dev['pw_name']);
+                }
                 delete this._devices[name];
-                print(`[WpMonitor] Device removed: ${name}`);
-                this.emit('device-removed', name);
             }
         }
     }
@@ -218,7 +228,7 @@ function _strip_tree_chars(s) {
 function _fetch_wpctl_status() {
     try {
         const [ok, stdout] = GLib.spawn_sync(
-            null, _get_wpctl_cmd().concat(['status']),
+            null, get_wpctl_cmd().concat(['status']),
             null, GLib.SpawnFlags.SEARCH_PATH, null
         );
         if (!ok) return '';
@@ -231,7 +241,7 @@ function _fetch_wpctl_status() {
 function _fetch_wpctl_status_async(callback) {
     try {
         const proc = Gio.Subprocess.new(
-            _get_wpctl_cmd().concat(['status']),
+            get_wpctl_cmd().concat(['status']),
             Gio.SubprocessFlags.STDOUT_PIPE
         );
 
@@ -267,7 +277,9 @@ function _fetch_capture_streams(status_text) {
     const capture_by_target = {};
 
     let in_streams = false;
-    const port_re = /\d+\.\s+(\S+)\s*>\s*(.+?):\S+\s+\[(active|init)\]/;
+    // Capture streams use 'port < device' (stream receives from device);
+    // output streams use 'port > device' (stream sends to device). Match both.
+    const port_re = /\d+\.\s+(\S+)\s*[<>]\s*(.+?):\S+\s+\[(active|init)\]/;
 
     for (const line of lines) {
         const stripped = line.trim();
@@ -372,7 +384,7 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
         try {
             const [ok2, inspect_stdout] = GLib.spawn_sync(
                 null,
-                _get_wpctl_cmd().concat(['inspect', String(node_id)]),
+                get_wpctl_cmd().concat(['inspect', String(node_id)]),
                 null,
                 GLib.SpawnFlags.SEARCH_PATH,
                 null
@@ -431,9 +443,27 @@ function _fetch_devices_from_wpctl(status_text) {
         const device_name = m[2].trim();
         const global_id = parseInt(m[1], 10);
 
+        let pw_name = device_name;
+        try {
+            const [ok, stdout] = GLib.spawn_sync(
+                null, get_wpctl_cmd().concat(['inspect', String(global_id)]),
+                null, GLib.SpawnFlags.SEARCH_PATH, null
+            );
+            if (ok) {
+                for (const iline of new TextDecoder().decode(stdout).split('\n')) {
+                    if (iline.includes('device.name')) {
+                        const parts = iline.split('=');
+                        pw_name = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
+                        break;
+                    }
+                }
+            }
+        } catch (e) {}
+
         results.push({
             name: device_name,
             description: device_name,
+            pw_name: pw_name,
             global_id: global_id,
         });
     }
@@ -449,7 +479,7 @@ function get_audio_nodes_async(callback) {
     if (typeof callback !== 'function') return;
     try {
         const proc = Gio.Subprocess.new(
-            _get_wpctl_cmd().concat(['status']),
+            get_wpctl_cmd().concat(['status']),
             Gio.SubprocessFlags.STDOUT_PIPE
         );
         proc.communicate_utf8_async(null, null, (p, res) => {

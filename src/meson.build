@@ -41,6 +41,7 @@ install_data(
   'daemon.js',
   'daemon_main.js',
   'wp_monitor.js',
+  'utils.js',
   install_dir: pkgdatadir_conf,
   install_mode: 'r--r--r--',
 )

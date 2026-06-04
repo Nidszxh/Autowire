@@ -1,42 +1,14 @@
-# Build directories
 _build/
 _flatpak_build/
 .flatpak-builder/
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.egg-info/
-dist/
-.eggs/
-
-# pytest
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Editor
 .vscode/
 .idea/
+meson-logs/
+meson-info/
+.DS_Store
+Thumbs.db
+ideas/
 *.swp
 *.swo
 *~
-
-# Meson
-meson-logs/
-meson-info/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Misc
-ideas/
-
-# Flatpak build artifacts
-data/window.ui
-data/profile_dialog.ui
-data/autowire.gresource
 

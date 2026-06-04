@@ -1,12 +1,7 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, GObject, GLib, Gio, Gtk } = imports.gi;
-
-const _is_flatpak = imports.gi.GLib.file_test('/.flatpak-info', imports.gi.GLib.FileTest.EXISTS);
-function _get_wpctl_cmd() {
-    return _is_flatpak ? ['flatpak-spawn', '--host', 'wpctl'] : ['wpctl'];
-}
-
+const { get_pactl_cmd } = imports.utils;
 const config_mgr = imports.config_mgr;
 const wp_monitor = imports.wp_monitor;
 
@@ -16,14 +11,117 @@ const _INVALID = Gtk.INVALID_LIST_POSITION;
 
 const BT_PROFILES = [
     ['', "Don't change"],
-    ['a2dp-sink-aac', 'AAC (high quality)'],
     ['a2dp-sink-ldac', 'LDAC (high quality)'],
-    ['a2dp-sink-aptx', 'aptX (high quality)'],
     ['a2dp-sink-aptx_hd', 'aptX HD (high quality)'],
+    ['a2dp-sink-aptx', 'aptX (high quality)'],
+    ['a2dp-sink-aac', 'AAC (high quality)'],
+    ['a2dp-sink', 'A2DP (codec auto)'],
     ['a2dp-sink-sbc_xq', 'SBC-XQ (high quality)'],
     ['a2dp-sink-sbc', 'SBC (standard)'],
     ['handsfree-headset', 'HSP/HFP (call / mSBC)'],
 ];
+
+// Highest quality first. Used for auto-detection.
+const BT_QUALITY_ORDER = [
+    'a2dp-sink-ldac',
+    'a2dp-sink-aptx_hd',
+    'a2dp-sink-aptx',
+    'a2dp-sink-aac',
+    'a2dp-sink',
+    'a2dp-sink-sbc_xq',
+    'a2dp-sink-sbc',
+];
+
+/**
+ * Parse `pactl list cards` and return a map of card_name -> available profile names.
+ * @returns {Object<string, string[]>}
+ */
+function _list_card_profiles() {
+    const out = {};
+    try {
+        const [ok, stdout] = GLib.spawn_sync(
+            null, get_pactl_cmd().concat(['list', 'cards']),
+            null, GLib.SpawnFlags.SEARCH_PATH, null
+        );
+        if (!ok) return out;
+        const text = new TextDecoder().decode(stdout);
+        let current_card = null;
+        let in_profiles = false;
+        for (const raw_line of text.split('\n')) {
+            const line = raw_line.trim();
+            if (line.startsWith('Name: ')) {
+                current_card = line.substring(6).trim();
+                out[current_card] = [];
+                in_profiles = false;
+            } else if (current_card && line === 'Profiles:') {
+                in_profiles = true;
+            } else if (current_card && in_profiles && line && !line.startsWith('Active Profile:')) {
+                const m = line.match(/^([\w\-+.]+):\s/);
+                if (m) {
+                    out[current_card].push(m[1]);
+                }
+            } else if (current_card && line === '' && in_profiles) {
+                in_profiles = false;
+            }
+        }
+    } catch (e) {
+    }
+    return out;
+}
+
+/**
+ * Pick the best BT profile for a device that supports input/output switching.
+ * `trigger_node_name` is a node name like 'bluez_output.XX_XX_...'.
+ * Returns '' if no preference can be inferred.
+ */
+function _auto_pick_bt_profile(trigger_node_name) {
+    if (!trigger_node_name || !trigger_node_name.startsWith('bluez_')) return '';
+    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{14,17})/);
+    if (!mac_match) return '';
+    const mac_dotted = mac_match[1].replace(/_/g, ':');
+    const card_name = `bluez_card.${mac_match[1]}`;
+
+    const cards = _list_card_profiles();
+    const available = cards[card_name] || cards[`bluez_card.${mac_dotted}`] || [];
+    if (available.length === 0) {
+        const names = Object.keys(cards);
+        for (const n of names) {
+            if (n.startsWith('bluez_card.') && n.toLowerCase().includes(mac_match[1].toLowerCase())) {
+                return _pick_best(available.concat(cards[n] || []));
+            }
+        }
+        return '';
+    }
+    return _pick_best(available);
+}
+
+function _pick_best(available) {
+    for (const cand of BT_QUALITY_ORDER) {
+        if (available.includes(cand)) return cand;
+    }
+    return '';
+}
+
+/**
+ * Return a Set of profile names the bluez card behind `trigger_node_name`
+ * actually exposes, or null when the trigger isn't a bluez device (in which
+ * case the ComboRow should keep the full BT_PROFILES list, just disabled).
+ */
+function _list_card_profiles_for_trigger(trigger_node_name) {
+    if (!trigger_node_name || !trigger_node_name.startsWith('bluez_')) return null;
+    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{14,17})/);
+    if (!mac_match) return null;
+    const card_name = `bluez_card.${mac_match[1]}`;
+    const cards = _list_card_profiles();
+    const available = new Set(cards[card_name] || []);
+    if (available.size === 0) {
+        // The card may not be in `pactl list cards` yet (e.g. right after
+        // pairing). Return an empty set so the ComboRow shows only the
+        // "Don't change" option — better than showing a wrong profile.
+        return available;
+    }
+    return available;
+}
 
 var ProfileDialog = GObject.registerClass({
     Signals: {
@@ -40,6 +138,7 @@ var ProfileDialog = GObject.registerClass({
         this._all_nodes = [];
         this._sink_nodes = [];
         this._source_nodes = [];
+        this._bt_profile_keys = BT_PROFILES.map(([k]) => k);
 
         this._setup_ui();
         this._connect_signals();
@@ -61,11 +160,6 @@ var ProfileDialog = GObject.registerClass({
         this._cancel_button = new Gtk.Button({ label: 'Cancel' });
         this._cancel_button.add_css_class('flat');
         header_bar.pack_start(this._cancel_button);
-
-        this._apply_button = new Gtk.Button({ label: 'Apply Now', tooltip_text: 'Save and apply immediately', valign: Gtk.Align.CENTER });
-        this._apply_button.set_sensitive(false);
-        this._apply_button.add_css_class('flat');
-        header_bar.pack_end(this._apply_button);
 
         this._save_button = new Gtk.Button({ label: 'Save', valign: Gtk.Align.CENTER });
         this._save_button.add_css_class('suggested-action');
@@ -198,12 +292,72 @@ var ProfileDialog = GObject.registerClass({
 
     _connect_signals() {
         this._save_button.connect('clicked', () => this._on_save());
-        this._apply_button.connect('clicked', () => this._on_apply_now());
         this._cancel_button.connect('clicked', () => this.close());
         this._name_entry.connect('notify::text', () => this._validate());
-        this._trigger_row.connect('notify::selected', () => { this._validate(); this._update_apply_now(); });
+        this._trigger_row.connect('notify::selected', () => {
+            this._validate();
+            this._refresh_bt_profile_options();
+            this._maybe_autofill_bt_profile();
+        });
         this._active_row.connect('notify::active', () => this._validate());
         this._validate();
+        this._refresh_bt_profile_options();
+    }
+
+    /**
+     * Replace the BT profile ComboRows' models with the subset of BT_PROFILES
+     * that the currently-selected trigger device actually supports. Falls back
+     * to the full list for non-BT triggers (where the rows stay disabled).
+     */
+    _refresh_bt_profile_options() {
+        const idx = this._trigger_row.get_selected();
+        const node = (idx !== _INVALID && idx < this._all_nodes.length) ? this._all_nodes[idx] : null;
+        const triggerName = node ? (node['name'] || '') : '';
+        const deviceProfiles = _list_card_profiles_for_trigger(triggerName);
+        // Map common names to PipeWire names the device may expose:
+        //   handsfree-headset → headset-head-unit
+        const mapped = deviceProfiles ? new Set(deviceProfiles) : null;
+        if (mapped && mapped.has('headset-head-unit')) mapped.add('handsfree-headset');
+        if (mapped && mapped.has('handsfree-headset')) mapped.add('headset-head-unit');
+        const filtered = mapped
+            ? BT_PROFILES.filter(([key]) => !key || mapped.has(key))
+            : BT_PROFILES;
+        const labels = filtered.map(([, label]) => label);
+        const previousKey = this._current_bt_profile_key();
+        const previousCallKey = this._current_bt_profile_call_key();
+        this._bt_profile_row.set_model(Gtk.StringList.new(labels));
+        this._bt_profile_call_row.set_model(Gtk.StringList.new(labels));
+        this._bt_profile_keys = filtered.map(([key]) => key);
+        // Re-select previously chosen values if they're still available.
+        if (previousKey) this._select_bt_profile(previousKey);
+        if (previousCallKey) this._select_bt_profile_call(previousCallKey);
+    }
+
+    _current_bt_profile_key() {
+        if (!this._bt_profile_keys) return '';
+        const idx = this._bt_profile_row.get_selected();
+        return (idx >= 0 && idx < this._bt_profile_keys.length) ? this._bt_profile_keys[idx] : '';
+    }
+
+    _current_bt_profile_call_key() {
+        if (!this._bt_profile_keys) return '';
+        const idx = this._bt_profile_call_row.get_selected();
+        return (idx >= 0 && idx < this._bt_profile_keys.length) ? this._bt_profile_keys[idx] : '';
+    }
+
+    _maybe_autofill_bt_profile() {
+        if (this._profile) return;
+        if (this._bt_profile_row.get_selected() !== 0) return;
+        const idx = this._trigger_row.get_selected();
+        if (idx === _INVALID || idx >= this._all_nodes.length) return;
+        const node = this._all_nodes[idx];
+        const picked = _auto_pick_bt_profile(node['name'] || '');
+        if (picked) {
+            this._select_bt_profile(picked);
+            if (this._bt_profile_call_row.get_selected() === 0) {
+                this._select_bt_profile_call('handsfree-headset');
+            }
+        }
     }
 
     _prefill(profile) {
@@ -226,14 +380,16 @@ var ProfileDialog = GObject.registerClass({
     }
 
     _select_bt_profile(btKey) {
-        for (let i = 0; i < BT_PROFILES.length; i++) {
-            if (BT_PROFILES[i][0] === btKey) { this._bt_profile_row.set_selected(i); return; }
+        const keys = this._bt_profile_keys || BT_PROFILES.map(([k]) => k);
+        for (let i = 0; i < keys.length; i++) {
+            if (keys[i] === btKey) { this._bt_profile_row.set_selected(i); return; }
         }
     }
 
     _select_bt_profile_call(btKey) {
-        for (let i = 0; i < BT_PROFILES.length; i++) {
-            if (BT_PROFILES[i][0] === btKey) { this._bt_profile_call_row.set_selected(i); return; }
+        const keys = this._bt_profile_keys || BT_PROFILES.map(([k]) => k);
+        for (let i = 0; i < keys.length; i++) {
+            if (keys[i] === btKey) { this._bt_profile_call_row.set_selected(i); return; }
         }
     }
 
@@ -242,16 +398,7 @@ var ProfileDialog = GObject.registerClass({
         this._save_button.set_sensitive(ok);
     }
 
-    _update_apply_now() {
-        const idx = this._trigger_row.get_selected();
-        this._apply_button.set_sensitive(idx !== _INVALID && idx < this._all_nodes.length);
-    }
-
-    _on_apply_now() {
-        this._on_save(false);
-    }
-
-    _on_save(closeDialog = true) {
+    _on_save() {
         const name = this._name_entry.get_text().trim();
         const triggerIdx = this._trigger_row.get_selected();
         const sinkIdx = this._sink_row.get_selected();
@@ -265,16 +412,69 @@ var ProfileDialog = GObject.registerClass({
         const triggerDisplay = triggerNode ? this._get_display_name(triggerNode) : '';
         const sinkNode = sinkIdx !== _INVALID && this._sink_nodes[sinkIdx] ? this._sink_nodes[sinkIdx]['name'] : '';
         const sourceNode = sourceIdx !== _INVALID && this._source_nodes[sourceIdx] ? this._source_nodes[sourceIdx]['name'] : '';
-        const btProfileKey = btIdx !== _INVALID && BT_PROFILES[btIdx] ? BT_PROFILES[btIdx][0] : '';
-        const btCallIdx = this._bt_profile_call_row.get_selected();
-        const btProfileCallKey = btCallIdx !== _INVALID && BT_PROFILES[btCallIdx] ? BT_PROFILES[btCallIdx][0] : '';
+        const btProfileKey = this._current_bt_profile_key();
+        const btProfileCallKey = this._current_bt_profile_call_key();
         const autoSwitch = this._auto_switch_row.get_active();
         const isActive = this._active_row.get_active();
 
-        config_mgr.save_profile(name, triggerDevice, sinkNode, sourceNode, btProfileKey, isActive, btProfileCallKey, autoSwitch, triggerDisplay);
-        this.emit('profile-saved');
-        if (closeDialog) {
-            this.close();
+        // If editing and the key (name or trigger) changed, delete the old
+        // profile first so we don't leave an orphan behind.
+        if (this._originalName !== null && this._originalTrigger !== null) {
+            const keyChanged = name !== this._originalName || triggerDevice !== this._originalTrigger;
+            if (keyChanged) {
+                config_mgr.delete_profile(this._originalTrigger, this._originalName);
+            }
         }
+
+        // Duplicate detection: if adding a new profile and one with the same
+        // name+trigger already exists, confirm overwrite.
+        const isEditingExisting = this._originalName !== null
+            && this._originalTrigger !== null
+            && name === this._originalName
+            && triggerDevice === this._originalTrigger;
+        if (!isEditingExisting) {
+            const existing = config_mgr.get_profile(triggerDevice, name);
+            if (existing) {
+                const alert = new Adw.AlertDialog({
+                    heading: 'Overwrite Profile?',
+                    body: `A profile named "${name}" already exists for this device. Overwrite it?`,
+                });
+                alert.add_response('cancel', 'Cancel');
+                alert.add_response('overwrite', 'Overwrite');
+                alert.set_response_appearance('overwrite', Adw.ResponseAppearance.DESTRUCTIVE);
+                alert.set_default_response('cancel');
+                alert.set_close_response('cancel');
+                alert.connect('response', (_dialog, response) => {
+                    if (response === 'overwrite') {
+                        this._do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
+                            btProfileKey, btProfileCallKey, autoSwitch, isActive);
+                    }
+                });
+                alert.present(this);
+                return;
+            }
+        }
+
+        this._do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
+            btProfileKey, btProfileCallKey, autoSwitch, isActive);
+    }
+
+    _do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
+        btProfileKey, btProfileCallKey, autoSwitch, isActive) {
+        const name = this._name_entry.get_text().trim();
+
+        config_mgr.save_profile({
+            name,
+            trigger: triggerDevice,
+            sink: sinkNode,
+            source: sourceNode,
+            btProfile: btProfileKey,
+            isActive,
+            btProfileCall: btProfileCallKey,
+            autoSwitch,
+            display: triggerDisplay,
+        });
+        this.emit('profile-saved');
+        this.close();
     }
 });

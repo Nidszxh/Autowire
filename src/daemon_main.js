@@ -37,15 +37,21 @@ function _watch_config_file(monitor) {
         return;
     }
 
+    let _config_change_timer = 0;
     _config_monitor.connect('changed', (_mon, _file, _other, event) => {
         if (event === Gio.FileMonitorEvent.CHANGES_DONE_HINT || event === Gio.FileMonitorEvent.CREATED || event === Gio.FileMonitorEvent.ATTRIBUTE_CHANGED) {
-            print('[Daemon] profiles.json changed, re-applying routing…');
-            for (const node of monitor.get_audio_nodes()) {
-                daemon.check_and_route_device(node['name'] || '', monitor, true);
-            }
-            for (const node_name of monitor.get_capture_nodes()) {
-                daemon.handle_capture_started(node_name, monitor);
-            }
+            if (_config_change_timer > 0) GLib.source_remove(_config_change_timer);
+            _config_change_timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                _config_change_timer = 0;
+                print('[Daemon] profiles.json changed, re-applying routing…');
+                for (const node of monitor.get_audio_nodes()) {
+                    daemon.check_and_route_device(node['name'] || '', monitor, true);
+                }
+                for (const node_name of monitor.get_capture_nodes()) {
+                    daemon.handle_capture_started(node_name, monitor);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
         }
     });
     _config_monitor.set_rate_limit(500);
@@ -74,12 +80,26 @@ function main() {
     monitor.connect('ready', () => {
         print('[Daemon] Routing already-connected devices…');
         for (const node of monitor.get_audio_nodes()) {
-            daemon.check_and_route_device(node['name'] || '', monitor);
+            daemon.check_and_route_device(node['name'] || '', monitor, true);
+        }
+        print('[Daemon] Activating already-paired Bluetooth cards…');
+        for (const dev of monitor.get_devices()) {
+            if ((dev['pw_name'] || '').startsWith('bluez_card.')) {
+                daemon.activate_bt_card(dev['global_id'], dev['pw_name'], monitor);
+            }
         }
         print('[Daemon] Checking for active captures…');
         for (const node_name of monitor.get_capture_nodes()) {
             daemon.handle_capture_started(node_name, monitor);
         }
+
+        monitor.connect('capture-started', (mon, node_name) => {
+            daemon.handle_capture_started(node_name, mon);
+        });
+        monitor.connect('capture-stopped', (mon, node_name) => {
+            daemon.handle_capture_stopped(node_name, mon);
+        });
+        print('[Daemon] Capture signal handlers installed.');
     });
 
     try {

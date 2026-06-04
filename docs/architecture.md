@@ -57,7 +57,7 @@ Atomic writes: `GLib.dir_make_tmp()` → `GLib.file_set_contents()` → `GLib.re
 Core routing logic + stream-aware capture switching.
 
 - `set_system_default(node_name)` → `boolean` — resolves node name to numeric PW ID via `wpctl inspect`, then `wpctl set-default <id>`. If `node_name` is empty and device is a BT headset, auto-discovers the sink/source from the `bluez_card.MAC`.
-- `set_bt_profile(device_global_id, profile_name)` → `boolean` — `wpctl set-profile <id> <profile>`
+- `set_bt_profile(device_global_id, profile_name, card_pw_name)` → `boolean` — `wpctl set-profile <id> <profile>`. Uses `card_pw_name` to resolve the profile to one the card actually exposes (fallback ladder: `_HSP_HFP` for call profiles, `_A2DP_QUALITY` for music).
 - `check_and_route_device(node_name, monitor)` → `boolean` — loads profiles, **skips any where `is_active != true`**, fires routing actions on the first matching active profile. Initial routing always uses `bt_profile`; capture-aware switching is handled by `handle_capture_started`/`handle_capture_stopped`
 - `handle_capture_started(node_name, monitor)` — cancels restore timer, routes BT mic as default source, switches to `bt_profile_call`
 - `handle_capture_stopped(node_name, monitor)` — starts 3s debounce, on expiry restores `bt_profile` and re-routes BT sink as default
@@ -66,7 +66,8 @@ Core routing logic + stream-aware capture switching.
 - `_bt_card_equal(a, b)` → `boolean` — compares two `bluez_card.XX` names for equality
 - `_bt_card_name(node_name)` → `string | null` — derives `bluez_card.XX_XX_...` from `bluez_output.XX_XX_...` or `bluez_input.XX_XX_...`
 - `_resolve_node_id(node_name)` → `number | null` — parses `wpctl status` for numeric IDs, `wpctl inspect`s each to match `node.name`
-- `_last_routed` dict + 5s cooldown, `_capture_timers` dict + 3s debounce
+- `activate_bt_card(global_id, card_name, monitor)` — called on `device-added` and during `ready`; checks if a BT card is in `off` state and an active profile targets it, then sets the best available profile (from profile config, falling back to `a2dp-sink-aac`). Safe to call repeatedly — tracks already-activated cards via `_activated_bt_cards` Set.
+- `_last_routed` dict + 5s cooldown, `_capture_timers` dict + 3s debounce, `_activated_bt_cards` Set
 
 ### `wp_monitor.js`
 Poll-based `Wp.Core` wrapper. GJS Wp bindings cannot read proxy properties, so polling via `wpctl status` + `wpctl inspect` is used instead of `Wp.ObjectManager`.
@@ -251,8 +252,10 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
  Gio.FileMonitor fires 'changed'
      │
      ▼
- Re-route all currently tracked nodes
- (calls check_and_route_device for each)
+  Re-route all currently tracked nodes
+  (calls check_and_route_device for each, force=true)
+  Re-apply active captures
+  (calls handle_capture_started for each captured node)
 ```
 
 ### Daemon Startup
@@ -260,16 +263,19 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
 ```
  daemon_main.js starts
      │
-     ├─ try: Wp.init(Wp.InitFlags.ALL) — fallback silently if typelib missing
-     ├─ build_monitor() → WpMonitor
-     ├─ monitor.start() → polls begin
-     ├─ FileMonitor installed on profiles.json
-     │
-     └─ on 'ready' event:
-           for each node in monitor.get_audio_nodes():
-               check_and_route_device(node_name, monitor)
-           for each node in monitor.get_capture_nodes():
-               handle_capture_started(node_name, monitor)
+  ├─ try: Wp.init(Wp.InitFlags.ALL) — fallback silently if typelib missing
+  ├─ build_monitor() → WpMonitor
+  ├─ monitor.start() → polls begin
+  ├─ FileMonitor installed on profiles.json
+  │
+  └─ on 'ready' event:
+        for each node in monitor.get_audio_nodes():
+            check_and_route_device(node_name, monitor, force=true)
+        for each dev in monitor.get_devices():
+            if bluez_card.* → activate_bt_card(dev.global_id, dev.pw_name, monitor)
+        for each node in monitor.get_capture_nodes():
+            handle_capture_started(node_name, monitor)
+        # capture-started/capture-stopped connected AFTER ready
 ```
 
 ---
@@ -299,7 +305,7 @@ The daemon bridges this via `_get_active_profile_for()` which falls back to BT c
 - `is_active`: only one profile per trigger can be `true`. The daemon fires only active profiles. Saving with `is_active=true` auto-deactivates all siblings for the same trigger.
 - `default_sink` / `default_source`: node names for `wpctl set-default`
 - `bt_profile`: optional. Valid values: `a2dp-sink-aac`, `a2dp-sink-ldac`, `a2dp-sink-aptx`, `a2dp-sink-aptx_hd`, `a2dp-sink-sbc_xq`, `a2dp-sink-sbc`, `handsfree-headset`. Empty = don't touch BT profile.
-- `bt_profile_call`: optional. BT profile to switch to when capture is active (call mode). Typically `handsfree-headset`. Only used when `auto_switch: true`.
+- `bt_profile_call`: optional. BT profile to switch to when capture is active (call mode). Typically `handsfree-headset`. The daemon also accepts `headset-head-unit` as an alternative HSP/HFP alias — both are treated as call profiles and will be substituted depending on what the card exposes. Only used when `auto_switch: true`.
 - `auto_switch`: boolean. When `true`, daemon monitors capture streams and auto-switches between `bt_profile` and `bt_profile_call` based on mic activity.
 
 ---

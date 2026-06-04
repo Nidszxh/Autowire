@@ -37,6 +37,7 @@
         "install -m 444 src/daemon.js /app/share/autowire/",
         "install -m 444 src/daemon_main.js /app/share/autowire/",
         "install -m 444 src/wp_monitor.js /app/share/autowire/",
+        "install -m 444 src/utils.js /app/share/autowire/",
         "install -d /app/share/applications",
         "install -d /app/share/metainfo",
         "install -d /app/share/dbus-1/session-services",

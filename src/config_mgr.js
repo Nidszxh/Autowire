@@ -2,7 +2,7 @@ const { GLib } = imports.gi;
 
 print('[Config] module loaded');
 
-var _XDG_CONFIG_HOME = GLib.getenv('XDG_CONFIG_HOME') || GLib.build_filenamev([GLib.getenv('HOME') || '', '.config']);
+const _XDG_CONFIG_HOME = GLib.getenv('XDG_CONFIG_HOME') || GLib.build_filenamev([GLib.getenv('HOME') || '', '.config']);
 var CONFIG_DIR = GLib.build_filenamev([_XDG_CONFIG_HOME, 'autowire']);
 var CONFIG_FILE = GLib.build_filenamev([CONFIG_DIR, 'profiles.json']);
 var ERROR_FILE = GLib.build_filenamev([CONFIG_DIR, 'last_error.json']);
@@ -50,6 +50,19 @@ function load_profiles() {
 
     const profiles = data['profiles'] || [];
 
+    // Drop corrupt entries where profile_name or trigger_device_name is not a string.
+    // This can happen from older buggy save_profile calls that passed the entire
+    // options object as profile_name.
+    let cleaned = false;
+    for (let i = profiles.length - 1; i >= 0; i--) {
+        const p = profiles[i];
+        if (typeof p['profile_name'] !== 'string' || typeof p['trigger_device_name'] !== 'string') {
+            print(`[Config] Dropping corrupt profile entry: ${JSON.stringify(p).substring(0, 80)}...`);
+            profiles.splice(i, 1);
+            cleaned = true;
+        }
+    }
+
     for (const p of profiles) {
         if (p['is_active'] === undefined) {
             p['is_active'] = false;
@@ -65,7 +78,7 @@ function load_profiles() {
             migrated = true;
         }
     }
-    if (migrated) {
+    if (cleaned || migrated) {
         _write_atomic({ profiles });
     }
 
@@ -122,14 +135,30 @@ function set_active_profile(trigger_device_name, profile_name) {
 }
 
 /**
- * @param {string} profile_name
- * @param {string} trigger_device
- * @param {string} default_sink
- * @param {string} default_source
- * @param {string} bt_profile
- * @param {boolean} is_active
+ * @param {Object} opts
+ * @param {string} opts.name       profile_name
+ * @param {string} opts.trigger    trigger_device_name
+ * @param {string} opts.sink       default_sink
+ * @param {string} opts.source     default_source
+ * @param {string} [opts.btProfile]      bt_profile
+ * @param {boolean} [opts.isActive]      is_active
+ * @param {string} [opts.btProfileCall]  bt_profile_call
+ * @param {boolean} [opts.autoSwitch]    auto_switch
+ * @param {string} [opts.display]        trigger_device_display
  */
-function save_profile(profile_name, trigger_device, default_sink, default_source, bt_profile = '', is_active = false, bt_profile_call = '', auto_switch = false, trigger_device_display = '') {
+function save_profile(opts) {
+    const {
+        name: profile_name,
+        trigger: trigger_device,
+        sink: default_sink,
+        source: default_source,
+        btProfile: bt_profile = '',
+        isActive: is_active = false,
+        btProfileCall: bt_profile_call = '',
+        autoSwitch: auto_switch = false,
+        display: trigger_device_display = '',
+    } = opts;
+
     const profiles = load_profiles();
 
     for (let i = 0; i < profiles.length; i++) {

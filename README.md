@@ -117,7 +117,7 @@ flatpak run io.github.nidszxh.Autowire.Daemon
 
 1. A device connects (USB dock, Bluetooth headset, HDMI monitor)
 2. WirePlumber creates a `WpNode` for the new audio endpoint
-3. The Daemon's `WpMonitor` catches the `node-added` signal
+3. The Daemon's `WpMonitor` polls `wpctl status` every 3s and detects new nodes; for Bluetooth cards, `device-added` triggers `activate_bt_card()` to bring the card out of `off` state into the profile defined by the active matching profile (or `a2dp-sink-aac` by default)
 4. `check_and_route_device()` looks up `profiles.json` for the `is_active` profile matching that trigger
 5. If a profile is active, it fires:
    - `wpctl set-default <sink>` — routes audio to the chosen output
@@ -162,7 +162,7 @@ When a profile has **Auto-switch for calls** enabled:
 
 1. An app captures the mic (Discord, Zoom, `arecord`, etc.)
 2. `WpMonitor` detects the `input_*` stream from `wpctl status` → emits `capture-started`
-3. Daemon cancels any pending restore, switches to `bt_profile_call` (e.g. `handsfree-headset — mSBC`)
+3. Daemon cancels any pending restore, switches to `bt_profile_call` (e.g. `handsfree-headset` — falls back to `headset-head-unit` if the card doesn't expose the former)
 4. Mic works — HSP/HFP profile is active
 5. App stops capturing → daemon starts 3s debounce (tolerates push-to-talk gaps)
 6. No new capture within 3s → daemon restores `bt_profile` (e.g. AAC, LDAC)
