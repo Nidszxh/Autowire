@@ -25,6 +25,12 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 
 ---
 
+## Screenshots
+
+![Main window](data/screenshots/main.png)
+
+---
+
 ## Requirements
 
 | Dependency | Version | Notes |
@@ -74,44 +80,7 @@ flatpak run --command=autowire-daemon io.github.nidszxh.Autowire
 ### The Double-Headed Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        UI  PROCESS                           │
-│  src/main.js  —  GTK4 + Adwaita (Wp optional)                        │
-│                                                            │
-│  ┌────────────┐   ┌────────────┐   ┌──────────────────┐    │
-│  │  Window     │   │  Profile   │   │   ConfigMgr      │    │
-│  │  (profile   │──▶│  Dialog    │──▶│  writes profiles │    │
-│  │   list)     │   │  (create/  │   │  .json atomically│    │
-│  └────────────┘   │   edit)     │   └────────┬─────────┘    │
-│                   └────────────┘            │               │
-│  gjs -I src/ src/main.js                    │               │
-└─────────────────────────────────────────────┼───────────────┘
-                                              │
-                           ~/.config/autowire/
-                           profiles.json
-                                              │
-                                              v
-┌─────────────────────────────────────────────┼───────────────┐
-│                      DAEMON PROCESS         │               │
-│  src/daemon_main.js  —  GLib-only, no GTK   │               │
-│                                             │               │
-│  ┌──────────────┐   ┌──────────────┐   ┌────┴────────┐    │
-│  │  WpMonitor   │──▶│   Daemon     │──▶│  ConfigMgr  │    │
-│  │  polls wpctl │   │  routing     │   │  reads      │    │
-│  │  every 3s    │   │  engine      │   │  profiles   │    │
-│  └──────┬───────┘   └──────┬───────┘   │  .json      │    │
-│         │                  │           └─────────────┘    │
-│         │                  │                               │
-│         ▼                  ▼                               │
-│  ┌──────────────┐   ┌──────────────┐                      │
-│  │  wpctl       │   │  Gio.File    │                      │
-│  │  status      │   │  Monitor     │                      │
-│  │  + inspect   │   │  (config     │                      │
-│  │              │   │   changes)   │                      │
-│  └──────────────┘   └──────────────┘                      │
-│                                                            │
-│  gjs -I src/ src/daemon_main.js                            │
-└──────────────────────────────────────────────────────────────┘
+ UI (GTK) ──write──▶  profiles.json  ◀──watch──  Daemon (GLib)
 ```
 
 ### Two Processes, One JSON
@@ -139,41 +108,14 @@ flatpak run --command=autowire-daemon io.github.nidszxh.Autowire
 When a profile has **Auto-switch for calls** enabled:
 
 ```
-                   Capture starts              Capture stops
-                   ┌──────────┐                 ┌──────────┐
-                   │ Discord/ │                 │ Discord/ │
-                   │ Zoom/    │                 │ Zoom/    │
-                   │ Meet mic │                 │ Meet mic │
-                   │  opens   │                 │  closes  │
-                   └────┬─────┘                 └────┬─────┘
-                        │                           │
-                        ▼                           ▼
-              ┌─────────────────┐          ┌─────────────────┐
-              │ wpctl status    │          │ wpctl status    │
-              │ Streams shows   │          │ Streams shows   │
-              │ input_* entry   │          │ no input_*      │
-              └────────┬────────┘          └────────┬────────┘
-                       │                            │
-                       ▼                            ▼
-              ┌─────────────────┐          ┌────────────────────────┐
-              │ emit            │          │ emit                   │
-              │ 'capture-started'│          │ 'capture-stopped'     │
-              └────────┬────────┘          └────────┬───────────────┘
-                       │                            │
-                       ▼                            ▼
-               ┌──────────────────────┐   ┌───────────────────────────┐
-               │ Cancel restore timer │   │ Start 3s debounce timer   │
-               │ Switch to HSP/HFP   │   │ (tolerates PTT gaps)      │
-               │ wpctl set-profile   │   │ If no new capture in 3s:  │
-               │  bt_profile_call    │   │   wpctl set-profile       │
-               └──────────────────────┘   │   bt_profile             │
-                                           │   ─────────────────      │
-                                           │   Route BT sink as      │
-                                           │   default                │
-                                           │   pactl move-sink-       │
-                                           │   input — migrate ALSA  │
-                                           │   streams to BT sink    │
-                                           └───────────────────────────┘
+ Capture starts → wpctl detects input_* stream
+   → switch to bt_profile_call (HSP/HFP)
+   → route BT mic as default source
+
+Capture stops → 3s debounce
+   → restore bt_profile (A2DP)
+   → route BT sink as default
+   → pactl migrate streams from ALSA
 ```
 
 1. An app captures the mic (Discord, Zoom, `arecord`, etc.)
@@ -249,18 +191,7 @@ autowire/
 └── LICENSE                           # GPL-3.0
 ```
 
----
 
-## Flathub Submission
-
-- [x] Add actual screenshots to `data/screenshots/` (16:9, at least 3) and update metainfo.xml URLs
-- [ ] Run `flatpak-builder-lint manifest io.github.nidszxh.Autowire.json`
-- [ ] Run `appstreamcli compose` (the validator Flathub uses, not standalone `appstreamcli validate`)
-- [ ] Verify D-Bus service file references correct entry point (`Exec=/app/bin/autowire`)
-- [ ] Verify `.desktop` file with `desktop-file-validate`
-- [ ] Fork [flathub/flathub](https://github.com/flathub/flathub) and open a New App PR
-
----
 
 ## License
 

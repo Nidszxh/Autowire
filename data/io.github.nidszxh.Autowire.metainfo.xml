@@ -52,19 +52,19 @@
   <screenshots>
     <screenshot type="default">
       <caption>Main window — empty state</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/main.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/v0.3.12/data/screenshots/main.png</image>
     </screenshot>
     <screenshot>
       <caption>Profile list with a configured device</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/profile.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/v0.3.12/data/screenshots/profile.png</image>
     </screenshot>
     <screenshot>
       <caption>Creating a new audio profile</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/add.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/v0.3.12/data/screenshots/add.png</image>
     </screenshot>
     <screenshot>
       <caption>Editing an existing profile</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/edit.png</image>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/v0.3.12/data/screenshots/edit.png</image>
     </screenshot>
   </screenshots>
 

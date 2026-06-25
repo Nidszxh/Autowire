@@ -3,12 +3,11 @@
   "runtime": "org.gnome.Platform",
   "runtime-version": "50",
   "sdk": "org.gnome.Sdk",
-  "branch": "stable",
   "command": "autowire",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
-    "--socket=x11",
+    "--socket=fallback-x11",
     "--device=dri",
     "--socket=session-bus",
     "--socket=pulseaudio",
@@ -16,7 +15,7 @@
     "--talk-name=org.freedesktop.WirePlumber",
     "--system-talk-name=org.freedesktop.WirePlumber",
     "--talk-name=org.freedesktop.Flatpak",
-    "--filesystem=xdg-config/autowire:create"
+    "--filesystem=~/.config/autowire:create"
   ],
   "cleanup": [
     "/include",
