@@ -1,5 +1,5 @@
 project('autowire',
-  version: '0.3.11',
+  version: '0.3.12',
   meson_version: '>= 0.62.0',
   default_options: ['warning_level=2'],
 )

@@ -95,9 +95,10 @@ on 'ready' signal (order matters!):
 
 capture-stopped flow (restore):
   1. set_bt_profile() → switch card from HSP/HFP back to A2DP
-  2. _reassert_default_sink() → set BT sink as default (tries monitor cache, falls back to pactl)
-  3. _migrate_streams_to_bt() → immediate pactl-based stream migration
-  4. delayed migration at 600ms → pactl _resolve_bt_sink_name() + migration (handles pw-pulse lag)
+  2. _bt_activate_after_delay() → safety retry: if profile switch leaves card in 'off', fall back to a2dp-sink after 5s
+  3. _reassert_default_sink() → set BT sink as default (tries monitor cache, falls back to pactl)
+  4. _migrate_streams_to_bt() → immediate pactl-based stream migration
+  5. delayed re-assert + migration at 600ms → pactl _resolve_bt_sink_name() + set_system_default() + migration (handles pw-pulse lag)
 ```
 
 ## Critical Patterns & Gotchas
@@ -125,12 +126,15 @@ capture-stopped flow (restore):
 - **WirePlumber restart recovery**: capture-started/stopped signals are wired OUTSIDE the `ready` handler to prevent duplicate handler chains. On Wp.Core reconnect, `ready` fires again with `_first_ready = false`, calling `engine.clear_state()` to purge stale routing/capture state then re-applies routing.
 
 ### UI Patterns
-- **Import/Export** — gear menu button opens `Gtk.FileDialog`. Import must call `dialog.open()` + `open_finish()`, NOT `dialog.save()` + `save_finish()` (would show "Save As" instead of "Open File").
+- **Import/Export** — gear menu button opens `Gtk.FileDialog`. Import must call `dialog.open()` + `open_finish()`, NOT `dialog.save()` + `save_finish()` (would show "Save As" instead of "Open File"). Export uses `dialog.save()` + `save_finish()` as expected.
 - **`Adw.PreferencesGroup` title via constructor broken** — always use `set_title()` after construction.
 - **`Adw.AlertDialog` needs object constructor** — `new Adw.AlertDialog({heading, body})`.
 - **`Adw.ComboRow` needs `Adw.PreferencesGroup` parent** — all `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) non-interactive outside one.
 - **`Gtk.Switch` active in constructor** — set `active` in constructor props, avoid setting post-construction to prevent spurious `notify::active` emissions.
-- **Profile dialog**: loads devices via `get_audio_nodes_async()` asynchronously. BT rows disabled for non-BT triggers with helper label. Auto-switch toggle only matters when `bt_profile_call` is set.
+- **Profile dialog**: loads devices via `get_audio_nodes_async()` asynchronously. Profile name uses `Gtk.Entry` in `Adw.PreferencesRow` (no separate card frame); blue focus box killed via `outline-width: 0` on per-widget `Gtk.CssProvider` at `USER` priority. BT and Call Profile dropdowns share the same device-filtered list. Auto-switch is implicit — setting a call profile enables it automatically; no separate toggle. BT labels stripped of parenthetical descriptions (`"LDAC"` not `"LDAC (high quality)"`). Dialog size 600×500.
+- **Profile rows**: clickable to edit via `activated` signal on `Adw.ActionRow`. Pencil icon (`document-edit-symbolic`) always visible on every row alongside move/delete buttons. No tooltips on any button.
+- **Main window**: 680×560 default size. `close-request` signal calls `app.quit()`. `vfunc_dispose()` kills daemon subprocess. Header "+" button hidden on empty state, made flat (removed `suggested-action`). Trigger group titles show device name only (no `(N)` count suffix). Empty state uses custom `Gtk.Box` layout instead of `Adw.StatusPage`.
+- **`Ctrl+N`** maps to `_on_add_clicked()` (not `_show_add_dialog()` which doesn't exist).
 - **`Wp` import optional everywhere** — `main.js`, `daemon_main.js`, `wp_monitor.js` all wrap Wp typelib import/init in try-catch. Flatpak `org.gnome.Platform//50` lacks `Wp-0.5` typelib, falls back to poll-only mode.
 - **No GResource/Blueprint** — all widgets built programmatically in GJS. No `.blp` or `.gresource` files.
 - **Keyboard shortcuts** — `Ctrl+N` (add profile), `Ctrl+Q` (quit), `F5` (refresh) via `Gio.SimpleAction` accelerators.

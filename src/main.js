@@ -10,8 +10,10 @@ try {
     print('[Main] Wp typelib not available, running without Wp');
 }
 
-const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
-const C = imports.constants;
+const { Adw, Gio, GLib, GLibUnix, GObject, Gtk } = imports.gi;
+
+const SIGTERM = 15;
+const SIGINT = 2;
 
 print('[Main] module loaded');
 
@@ -35,6 +37,19 @@ const AutowireApplication = GObject.registerClass(class AutowireApplication exte
 
 function main() {
     const app = new AutowireApplication();
+
+    GLibUnix.signal_add(GLib.PRIORITY_HIGH, SIGINT, () => {
+        print('[Main] Received SIGINT, quitting…');
+        app.quit();
+        return GLib.SOURCE_REMOVE;
+    });
+
+    GLibUnix.signal_add(GLib.PRIORITY_HIGH, SIGTERM, () => {
+        print('[Main] Received SIGTERM, quitting…');
+        app.quit();
+        return GLib.SOURCE_REMOVE;
+    });
+
     return app.run([GLib.get_prgname() || 'autowire']);
 }
 

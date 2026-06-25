@@ -51,35 +51,43 @@
 
   <screenshots>
     <screenshot type="default">
-      <caption>The main profile list showing configured audio profiles</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/1.png</image>
+      <caption>Main window — empty state</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/main.png</image>
     </screenshot>
     <screenshot>
-      <caption>Creating a new profile with live device selection</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/2.png</image>
+      <caption>Profile list with a configured device</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/profile.png</image>
     </screenshot>
     <screenshot>
-      <caption>Editing a profile</caption>
-      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/3.png</image>
+      <caption>Creating a new audio profile</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/add.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Editing an existing profile</caption>
+      <image>https://raw.githubusercontent.com/nidszxh/autowire/main/data/screenshots/edit.png</image>
     </screenshot>
   </screenshots>
 
+  <categories>
+    <category>Audio</category>
+    <category>AudioVideo</category>
+  </categories>
+
   <releases>
-    <release version="0.3.12" date="2026-06-24">
+    <release version="0.3.12" date="2026-06-25">
       <description>
-        <p>Production-hardening release: 163 tests, crash-safe subprocess I/O, WirePlumber restart recovery, and packaging fixes.</p>
+        <p>Stream migration fix, pactl fallback, DaemonEngine class, Flatpak polish, and expanded test suite.</p>
         <ul>
+          <li>DaemonEngine class — all mutable state encapsulated in instance; module-level constants remain at module scope</li>
           <li>WirePlumber restart recovery — capture signals wired outside ready handler; clear_state() purges stale routing on reconnect</li>
-          <li>BT device removal guard — daemon skips profile restore if the Bluetooth device was physically disconnected during a call</li>
-          <li>Eliminated all GLib.spawn_sync calls — centralized Gio.Subprocess+timeout utility prevents daemon hangs</li>
-          <li>Fixed pipe buffer deadlock — all subprocess I/O uses communicate_utf8_async instead of blocking wait_async</li>
-          <li>Fixed O(N) subprocess polling — known devices cached by global_id; no redundant wpctl inspect calls</li>
-          <li>Atomic file writes via GLib.file_set_contents directly — removed redundant GLib.rename wrapper that silently failed</li>
-          <li>Input validation for desktop notifications — summary/body truncated and sanitized before notify-send</li>
-          <li>Added log.js shared module — structured logging with levels, timestamps, file output, and 1MB rotation</li>
-          <li>Added spawn_sync_with_timeout in utils.js — reusable async subprocess with timeout for the entire codebase</li>
-          <li>Removed sync device loading — profile dialog uses async-only loading; no blocking fallback</li>
-          <li>163 GJS unit tests (new: test_utils.js, test_log.js) covering subprocess, parsing, BT profiles, config CRUD, daemon routing, and monitor parsing</li>
+          <li>Stream migration after A2DP restore — pactl move-sink-input migrates ALSA-bound streams back to BT sink after calls</li>
+          <li>Pactl fallback for default sink re-assertion — bypasses stale 3s-polled monitor cache after HSP/A2DP profile switches</li>
+          <li>BT node cache bypass — bluez_* nodes skip poll data cache since PipeWire recreates them with new IDs after profile switches</li>
+          <li>Flatpak daemon wrapper — exit code detection prevents restart loop on intentional Ctrl+C shutdown</li>
+          <li>Bug fixes: activate_bt_card() ordering, handle_capture_stopped re-entrancy guard, read-only profile loader</li>
+          <li>Desktop notifications, file-based logging, keyboard shortcuts, Import/Export from gear menu</li>
+          <li>Added shared modules: log.js (structured logging), spawn_sync_with_timeout in utils.js</li>
+          <li>192 GJS unit tests across 7 test files</li>
         </ul>
       </description>
     </release>

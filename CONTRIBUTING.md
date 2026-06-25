@@ -118,7 +118,7 @@ If a new capture starts during debounce, the timer is cancelled. This handles pu
 
 ## Testing
 
-Run all 178 tests:
+Run all 192 tests:
 
 ```bash
 ./tests/test.sh

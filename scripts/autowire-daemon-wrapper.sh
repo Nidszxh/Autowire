@@ -3,6 +3,10 @@
 # for the native install; Flatpak has no systemd inside the sandbox).
 while true; do
     gjs -I /app/share/autowire /app/share/autowire/daemon_main.js "$@"
-    echo "[autowire-daemon] Daemon exited unexpectedly, restarting in 2s..."
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        exit 0
+    fi
+    echo "[autowire-daemon] Daemon exited with code $rc, restarting in 2s..."
     sleep 2
 done

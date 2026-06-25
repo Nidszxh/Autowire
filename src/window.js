@@ -58,6 +58,10 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
             GLib.source_remove(id);
         }
         this._flash_timers.clear();
+        if (this._daemon_proc) {
+            try { this._daemon_proc.force_exit(); } catch (_) {}
+            this._daemon_proc = null;
+        }
         super.vfunc_dispose();
     }
 
@@ -92,7 +96,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     }
 
     _build_ui() {
-        this.set_default_size(720, 640);
+        this.set_default_size(680, 560);
         this.set_title('Autowire');
 
         this._toast_overlay = new Adw.ToastOverlay();
@@ -103,21 +107,19 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         this._add_button = new Gtk.Button({
             icon_name: 'list-add-symbolic',
-            tooltip_text: 'Add Profile',
+            tooltip_text: 'New Profile',
         });
-        this._add_button.add_css_class('suggested-action');
+        this._add_button.add_css_class('flat');
         header_bar.pack_end(this._add_button);
 
         this._about_button = new Gtk.Button({
             icon_name: 'help-about-symbolic',
-            tooltip_text: 'About',
         });
         this._about_button.add_css_class('flat');
         header_bar.pack_start(this._about_button);
 
         const menu_button = new Gtk.MenuButton({
             icon_name: 'open-menu-symbolic',
-            tooltip_text: 'Import / Export',
         });
         menu_button.add_css_class('flat');
         const menu_model = new Gio.Menu();
@@ -140,21 +142,46 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
             transition_duration: 200,
         });
 
-        const status_page = new Adw.StatusPage({
-            icon_name: 'audio-speakers-symbolic',
-            title: 'No Audio Profiles',
-            description: 'Connect your headset, speaker, or dock first —\nthen add a profile to route audio to it automatically.',
+        const empty_page = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            valign: Gtk.Align.CENTER,
+            halign: Gtk.Align.CENTER,
+            spacing: 12,
         });
+        const empty_icon = new Gtk.Image({
+            icon_name: 'audio-speakers-symbolic',
+            pixel_size: 96,
+        });
+        empty_icon.add_css_class('dim-label');
+        const empty_title = new Gtk.Label({
+            label: 'No Audio Profiles',
+            halign: Gtk.Align.CENTER,
+        });
+        empty_title.add_css_class('title-1');
+        empty_title.add_css_class('bold');
+        const empty_desc = new Gtk.Label({
+            label: 'Connect a Bluetooth device, then add a profile\nto route audio automatically.',
+            halign: Gtk.Align.CENTER,
+            wrap: true,
+            max_width_chars: 40,
+        });
+        empty_desc.add_css_class('dim-label');
+        empty_desc.set_margin_top(4);
 
         this._empty_add_button = new Gtk.Button({
             label: 'Add Profile',
             halign: Gtk.Align.CENTER,
+            margin_top: 8,
         });
         this._empty_add_button.add_css_class('suggested-action');
         this._empty_add_button.add_css_class('pill');
-        status_page.set_child(this._empty_add_button);
 
-        this._main_stack.add_named(status_page, 'empty');
+        empty_page.append(empty_icon);
+        empty_page.append(empty_title);
+        empty_page.append(empty_desc);
+        empty_page.append(this._empty_add_button);
+
+        this._main_stack.add_named(empty_page, 'empty');
 
         this._profiles_page = new Adw.PreferencesPage();
         this._profiles_page.set_vexpand(true);
@@ -172,7 +199,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         this.set_content(this._toast_overlay);
 
         const add_profile_action = new Gio.SimpleAction({ name: 'add-profile' });
-        add_profile_action.connect('activate', () => { this._show_add_dialog(); });
+        add_profile_action.connect('activate', () => { this._on_add_clicked(); });
         this.add_action(add_profile_action);
 
         const refresh_action = new Gio.SimpleAction({ name: 'refresh' });
@@ -199,6 +226,11 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         this._empty_add_button.connect('clicked', () => this._on_add_clicked());
         this._about_button.connect('clicked', () => this._on_about_clicked());
         this._daemon_banner.connect('button-clicked', () => this._on_start_daemon_clicked());
+        this.connect('close-request', () => {
+            const app = this.get_application();
+            if (app) app.quit();
+            return false;
+        });
     }
 
     refresh_profiles() {
@@ -218,10 +250,12 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         if (profiles.length === 0) {
             this._main_stack.set_visible_child_name('empty');
+            this._add_button.set_visible(false);
             return;
         }
 
         this._main_stack.set_visible_child_name('profiles');
+        this._add_button.set_visible(true);
 
         const group = new Adw.PreferencesGroup();
         const groups = _group_by_trigger(profiles);
@@ -229,7 +263,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         for (const [trigger, triggerProfiles] of Object.entries(groups)) {
             const triggerGroup = new Adw.PreferencesGroup();
             const displayName = triggerProfiles[0]['trigger_device_display'] || trigger;
-            triggerGroup.set_title(`${displayName} (${triggerProfiles.length})`);
+            triggerGroup.set_title(displayName);
             for (const profile of triggerProfiles) {
                 triggerGroup.add(this._build_profile_row(profile, triggerProfiles.length > 1));
             }
@@ -258,16 +292,24 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' · ') : (profile['trigger_device_display'] || trigger);
         const row = new Adw.ActionRow({ title: profileName, subtitle: subtitle });
+        row.connect('activated', () => this._on_edit_clicked(profile));
 
         const sw = new Gtk.Switch({ valign: Gtk.Align.CENTER, active: profile['is_active'] || false });
         this._switch_map.set(trigger + '|' + profileName, sw);
         sw.connect('notify::active', () => this._on_switch_toggled(sw, profile));
         row.add_suffix(sw);
 
+        const editBtn = new Gtk.Button({
+            icon_name: 'document-edit-symbolic',
+            valign: Gtk.Align.CENTER,
+        });
+        editBtn.add_css_class('flat');
+        editBtn.connect('clicked', () => this._on_edit_clicked(profile));
+        row.add_suffix(editBtn);
+
         if (hasSiblings) {
             const upBtn = new Gtk.Button({
                 icon_name: 'go-up-symbolic',
-                tooltip_text: 'Move Up',
                 valign: Gtk.Align.CENTER,
             });
             upBtn.add_css_class('flat');
@@ -276,27 +318,15 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
             const downBtn = new Gtk.Button({
                 icon_name: 'go-down-symbolic',
-                tooltip_text: 'Move Down',
                 valign: Gtk.Align.CENTER,
             });
             downBtn.add_css_class('flat');
             downBtn.connect('clicked', () => this._on_move_down_clicked(profile));
             row.add_suffix(downBtn);
-        } else {
-            const editBtn = new Gtk.Button({
-                icon_name: 'document-edit-symbolic',
-                tooltip_text: 'Edit Profile',
-                valign: Gtk.Align.CENTER,
-            });
-            editBtn.add_css_class('flat');
-            editBtn.connect('clicked', () => this._on_edit_clicked(profile));
-            row.add_suffix(editBtn);
-            row.set_activatable_widget(editBtn);
         }
 
         const delBtn = new Gtk.Button({
             icon_name: 'user-trash-symbolic',
-            tooltip_text: 'Delete Profile',
             valign: Gtk.Align.CENTER,
         });
         delBtn.add_css_class('flat');
@@ -420,7 +450,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         about.set_application_icon('io.github.nidszxh.Autowire');
         about.set_developer_name('nidszxh');
         about.set_version(APP_VERSION);
-        about.set_comments('Automated audio profile manager for GNOME.\nAutomatically switches audio routing when devices connect.');
+        about.set_comments('Audio routing manager for GNOME.\nAutomatically switches audio profiles when Bluetooth devices connect.');
         about.set_website('https://github.com/nidszxh/autowire');
         about.set_support_url('https://github.com/nidszxh/autowire/issues');
         about.set_license_type(Gtk.License.GPL_3_0);

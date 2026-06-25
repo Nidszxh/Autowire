@@ -44,8 +44,8 @@ var DaemonEngine = class {
             const safe_summary = String(summary).replace(/[\x00-\x1f]/g, '').substring(0, 200);
             const safe_body = String(body || '').replace(/[\x00-\x1f]/g, '').substring(0, 200);
             Gio.Subprocess.new(
-                ['notify-send', '--app-name=Autowire', safe_summary, safe_body],
-                Gio.SubprocessFlags.NONE
+                ['notify-send', '--app-name=Autowire', '--icon=io.github.nidszxh.Autowire', safe_summary, safe_body],
+                Gio.SubprocessFlags.STDERR_SILENCE
             );
         } catch (e) {
             // notify-send may be missing; ignore
@@ -558,14 +558,22 @@ var DaemonEngine = class {
     _resolve_bt_sink_name(card_name) {
         const [ok, out] = this._spawn_sync_with_timeout(
             get_pactl_cmd().concat(['list', 'sinks']), 2000);
-        if (!ok) return null;
+        if (!ok) {
+            print(`[Daemon] pactl list sinks failed for ${card_name}`);
+            return null;
+        }
+        // Prefer numeric suffix (e.g. bluez_output.MAC.1 — A2DP sinks),
+        // fall back to any bluez_output name for the card.
+        let fallback = null;
         for (const line of out.split('\n')) {
-            const m = line.match(/^\s+Name:\s+(bluez_output\.[A-Fa-f0-9_]+\.[0-9]+)/);
+            const m = line.match(/^\s+Name:\s+(bluez_output\.[A-Za-z0-9_\.]+)/);
             if (m && this._bt_card_name(m[1]) === card_name) {
-                return m[1];
+                if (/\.\d+$/.test(m[1])) return m[1];
+                if (!fallback) fallback = m[1];
             }
         }
-        return null;
+        if (fallback) print(`[Daemon] Resolved BT sink for ${card_name} (fallback): ${fallback}`);
+        return fallback;
     }
 
     _migrate_streams_to_bt(bt_sink_name) {
@@ -710,6 +718,10 @@ var DaemonEngine = class {
                 const global_id = monitor.resolveDeviceGlobalId(card_name);
                 if (global_id) {
                     this.set_bt_profile(global_id, normal_profile, card_name);
+                    // Schedule off-retry: if the profile switch leaves the card
+                    // in 'off' (BT radio glitch, codec mismatch), fall back
+                    // to a2dp-sink after 5s.
+                    this._bt_activate_after_delay(global_id, card_name, normal_profile, C.BT_RETRY_DELAY_MS);
                 } else {
                         log.warn('daemon', `could not resolve global ID for ${card_name}, normal profile not restored`);
                 }
@@ -720,15 +732,20 @@ var DaemonEngine = class {
                     this._schedule_sink_reassert(card_name, monitor, 0);
                 }
 
-                // Schedule delayed migration to allow pipewire-pulse to register
-                // the new BT sink before moving streams off ALSA.
+                // Schedule delayed re-assert + migration to allow pipewire-pulse
+                // to register the new BT sink before moving streams off ALSA.
                 // Query pactl directly (real-time) instead of monitor cache,
                 // because the monitor may not have re-polled yet.
                 const mig_card = card_name;
+                const mig_mon = monitor;
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
                     const sink_name = this._resolve_bt_sink_name(mig_card);
                     if (sink_name) {
+                        print(`[Daemon] Delayed sink found for ${mig_card}: ${sink_name}, re-asserting default + migrating`);
+                        this.set_system_default(sink_name, mig_mon);
                         this._migrate_streams_to_bt(sink_name);
+                    } else {
+                        print(`[Daemon] Delayed sink not found yet for ${mig_card}`);
                     }
                     return GLib.SOURCE_REMOVE;
                 });

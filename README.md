@@ -232,7 +232,7 @@ autowire/
 │   └── architecture.md
 │
 ├── data/
-│   ├── screenshots/            # Required for Flathub (empty until populated)
+│   ├── screenshots/            # 4 screenshots (main, profile, add, edit)
 │   ├── icons/hicolor/          # App icons (scalable + symbolic)
 │   ├── *.service               # systemd --user + D-Bus session service
 │   ├── io.github.nidszxh.Autowire.desktop.in
@@ -253,7 +253,7 @@ autowire/
 
 ## Flathub Submission
 
-- [ ] Add actual screenshots to `data/screenshots/` (16:9, at least 3) and update metainfo.xml URLs
+- [x] Add actual screenshots to `data/screenshots/` (16:9, at least 3) and update metainfo.xml URLs
 - [ ] Run `flatpak-builder-lint manifest io.github.nidszxh.Autowire.json`
 - [ ] Run `appstreamcli compose` (the validator Flathub uses, not standalone `appstreamcli validate`)
 - [ ] Verify D-Bus service file references correct entry point (`Exec=/app/bin/autowire`)

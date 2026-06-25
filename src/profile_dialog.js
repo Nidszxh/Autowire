@@ -12,16 +12,16 @@ print('[ProfileDialog] module loaded');
 const _INVALID = Gtk.INVALID_LIST_POSITION;
 
 const BT_PROFILES = [
-    ['', "Don't change"],
-    ['a2dp-sink-ldac', 'LDAC (high quality)'],
-    ['a2dp-sink-aptx_hd', 'aptX HD (high quality)'],
-    ['a2dp-sink-aptx', 'aptX (high quality)'],
-    ['a2dp-sink-aac', 'AAC (high quality)'],
-    ['a2dp-sink', 'A2DP (codec auto)'],
-    ['a2dp-sink-sbc_xq', 'SBC-XQ (high quality)'],
-    ['a2dp-sink-sbc', 'SBC (standard)'],
-    ['handsfree-headset', 'HSP/HFP handsfree (call / mSBC)'],
-    ['headset-head-unit', 'HSP/HFP headset (call / CVSD)'],
+    ['', 'None'],
+    ['a2dp-sink-ldac', 'LDAC'],
+    ['a2dp-sink-aptx_hd', 'aptX HD'],
+    ['a2dp-sink-aptx', 'aptX'],
+    ['a2dp-sink-aac', 'AAC'],
+    ['a2dp-sink', 'A2DP'],
+    ['a2dp-sink-sbc_xq', 'SBC-XQ'],
+    ['a2dp-sink-sbc', 'SBC'],
+    ['handsfree-headset', 'HSP/HFP handsfree'],
+    ['headset-head-unit', 'HSP/HFP headset'],
 ];
 
 /**
@@ -101,7 +101,15 @@ var ProfileDialog = GObject.registerClass({
 
     _setup_ui() {
         const content = new Adw.ToolbarView();
-        content.set_size_request(480, 560);
+        content.set_size_request(600, 500);
+
+        const css_provider = new Gtk.CssProvider();
+        css_provider.load_from_string(`
+            row { padding-top: 6px; padding-bottom: 6px; }
+            row > box > label.caption { opacity: 0.75; }
+            row switch { margin-right: 6px; }
+        `);
+        content.get_style_context().add_provider(css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         const title_label = new Gtk.Label({
             label: `<b>${this._profile ? 'Edit Profile' : 'Add Profile'}</b>`,
@@ -109,6 +117,8 @@ var ProfileDialog = GObject.registerClass({
         });
         const header_bar = new Adw.HeaderBar({
             title_widget: title_label,
+            show_start_title_buttons: false,
+            show_end_title_buttons: false,
         });
 
         this._cancel_button = new Gtk.Button({ label: 'Cancel' });
@@ -129,11 +139,10 @@ var ProfileDialog = GObject.registerClass({
 
         const main_box = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            margin_top: 20,
-            margin_bottom: 20,
-            margin_start: 20,
-            margin_end: 20,
-            spacing: 16,
+            margin_top: 24,
+            margin_bottom: 24,
+            margin_start: 24,
+            margin_end: 24,
         });
 
         this._content_stack = new Gtk.Stack({ transition_type: Gtk.StackTransitionType.CROSSFADE, transition_duration: 200 });
@@ -145,15 +154,35 @@ var ProfileDialog = GObject.registerClass({
         loading_box.append(new Gtk.Label({ label: 'Scanning audio devices…', halign: Gtk.Align.CENTER }));
         this._content_stack.add_named(loading_box, 'loading');
 
-        const form_box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 0 });
         const group = new Adw.PreferencesGroup();
 
-        this._name_entry = new Adw.EntryRow({ title: 'Profile Name' });
-        group.add(this._name_entry);
+        this._name_row = new Adw.PreferencesRow();
+        const name_box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_start: 12,
+            margin_end: 12,
+            margin_top: 8,
+            margin_bottom: 8,
+        });
+        const name_label = new Gtk.Label({ label: 'Profile Name', halign: Gtk.Align.START });
+        name_label.add_css_class('caption');
+        name_label.add_css_class('heading');
+        this._name_entry = new Gtk.Entry({ hexpand: true, placeholder_text: 'e.g. High Quality AAC' });
+        const entry_css = new Gtk.CssProvider();
+        entry_css.load_from_string(`
+            entry { border: none; box-shadow: none; background: transparent; outline-width: 0; padding: 2px 4px; }
+            entry:focus { border: none; box-shadow: none; background: transparent; outline-width: 0; }
+        `);
+        this._name_entry.get_style_context().add_provider(entry_css, Gtk.STYLE_PROVIDER_PRIORITY_USER);
+        name_box.append(name_label);
+        name_box.append(this._name_entry);
+        this._name_row.set_child(name_box);
+        group.add(this._name_row);
 
         this._trigger_row = new Adw.ComboRow({
-            title: 'Trigger Device',
-            subtitle: 'Device that activates this profile',
+            title: 'Device',
+            subtitle: 'Audio device that activates this profile',
             model: Gtk.StringList.new(['Scanning...']),
         });
         group.add(this._trigger_row);
@@ -177,19 +206,14 @@ var ProfileDialog = GObject.registerClass({
         this._bt_profile_row.set_model(Gtk.StringList.new(bt_labels));
         group.add(this._bt_profile_row);
 
-        this._bt_profile_call_row = new Adw.ComboRow({ title: 'Call BT Profile', subtitle: 'Bluetooth profile during calls (HSP/HFP for mic)' });
+        this._bt_profile_call_row = new Adw.ComboRow({ title: 'Call Profile', subtitle: 'Switches to hands-free mode (HSP/HFP) when mic is active' });
         this._bt_profile_call_row.set_model(Gtk.StringList.new(bt_labels));
         group.add(this._bt_profile_call_row);
-
-        this._auto_switch_row = new Adw.SwitchRow({ title: 'Auto-switch for calls', subtitle: 'Switch to call profile when mic is active' });
-        group.add(this._auto_switch_row);
 
         this._active_row = new Adw.SwitchRow({ title: 'Active', subtitle: 'Enable this profile immediately when triggered' });
         group.add(this._active_row);
 
-        form_box.append(group);
-
-        this._content_stack.add_named(form_box, 'ready');
+        this._content_stack.add_named(group, 'ready');
         main_box.append(this._content_stack);
         this._content_stack.set_visible_child_name('loading');
 
@@ -245,7 +269,7 @@ var ProfileDialog = GObject.registerClass({
     _connect_signals() {
         this._save_button.connect('clicked', () => this._on_save());
         this._cancel_button.connect('clicked', () => this.close());
-        this._name_entry.connect('notify::text', () => this._validate());
+        this._name_entry.connect('changed', () => this._validate());
         this._trigger_row.connect('notify::selected', () => {
             this._validate();
             this._refresh_bt_profile_options();
@@ -265,22 +289,22 @@ var ProfileDialog = GObject.registerClass({
         const triggerName = node ? (node['name'] || '') : '';
         const deviceProfiles = _list_card_profiles_for_trigger(triggerName);
         const isBt = deviceProfiles !== null;
-        // Map common profile name variations
         const mapped = deviceProfiles ? new Set(deviceProfiles) : null;
         if (mapped && mapped.has('headset-head-unit')) mapped.add('handsfree-headset');
         if (mapped && mapped.has('handsfree-headset')) mapped.add('headset-head-unit');
-        const filtered = mapped
+        const hasProfiles = mapped && mapped.size > 0;
+        const filtered = hasProfiles
             ? BT_PROFILES.filter(([key]) => !key || mapped.has(key))
             : BT_PROFILES;
         const labels = filtered.map(([, label]) => label);
         const previousKey = this._current_bt_profile_key();
         const previousCallKey = this._current_bt_profile_call_key();
         this._bt_profile_row.set_model(Gtk.StringList.new(labels));
-        this._bt_profile_call_row.set_model(Gtk.StringList.new(labels));
         this._bt_profile_keys = filtered.map(([key]) => key);
         this._bt_profile_row.set_sensitive(isBt);
+
+        this._bt_profile_call_row.set_model(Gtk.StringList.new(labels));
         this._bt_profile_call_row.set_sensitive(isBt);
-        this._auto_switch_row.set_sensitive(isBt);
         // Re-select previously chosen values if they're still available.
         if (previousKey) this._select_bt_profile(previousKey);
         if (previousCallKey) this._select_bt_profile_call(previousCallKey);
@@ -322,7 +346,6 @@ var ProfileDialog = GObject.registerClass({
         this._select_by_name(this._source_row, this._source_nodes, actions['default_source'] || '');
         this._select_bt_profile(actions['bt_profile'] || '');
         this._select_bt_profile_call(actions['bt_profile_call'] || '');
-        this._auto_switch_row.set_active(actions['auto_switch'] || false);
         this._active_row.set_active(profile['is_active'] || false);
     }
 
@@ -365,7 +388,6 @@ var ProfileDialog = GObject.registerClass({
         const sourceNode = sourceIdx !== _INVALID && this._source_nodes[sourceIdx] ? this._source_nodes[sourceIdx]['name'] : '';
         const btProfileKey = this._current_bt_profile_key();
         const btProfileCallKey = this._current_bt_profile_call_key();
-        const autoSwitch = this._auto_switch_row.get_active();
         const isActive = this._active_row.get_active();
 
         // Check for duplicate name+trigger before saving.
@@ -388,7 +410,7 @@ var ProfileDialog = GObject.registerClass({
                 alert.connect('response', (_dialog, response) => {
                     if (response === 'overwrite') {
                         this._do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
-                            btProfileKey, btProfileCallKey, autoSwitch, isActive);
+                            btProfileKey, btProfileCallKey, isActive);
                     }
                 });
                 alert.present(this);
@@ -397,12 +419,13 @@ var ProfileDialog = GObject.registerClass({
         }
 
         this._do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
-            btProfileKey, btProfileCallKey, autoSwitch, isActive);
+            btProfileKey, btProfileCallKey, isActive);
     }
 
     _do_save(triggerDevice, triggerDisplay, sinkNode, sourceNode,
-        btProfileKey, btProfileCallKey, autoSwitch, isActive) {
+        btProfileKey, btProfileCallKey, isActive) {
         const name = this._name_entry.get_text().trim();
+        const autoSwitch = !!btProfileCallKey;
 
         config_mgr.save_profile({
             name,

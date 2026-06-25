@@ -22,59 +22,25 @@ All notable changes to Autowire are documented here.
 - **`_reassert_default_sink()` pactl fallback** — when `get_audio_nodes()` returns stale data (no BT sink found), falls back to `_resolve_bt_sink_name()` via pactl. Added `_schedule_sink_reassert()` for retry on successive poll cycles.
 - **`_resolve_node_id()` BT cache bypass** — `bluez_*` nodes skip the poll data cache since PipeWire recreates them with new PW IDs after profile switches (ALSA nodes retain their IDs, so cache is safe for them).
 - **Source default removal** — removed `set_system_default()` call for BT input source in `handle_capture_started()` since `wpctl set-default` rejects `Audio/Source/Internal` nodes.
-- **178 tests** — 178 GJS unit tests across 6 test files.
+- **192 tests** — 192 GJS unit tests across 7 test files.
+- **Flatpak daemon wrapper exit fix** — wrapper now checks gjs exit code: exits cleanly on code 0 (Ctrl+C/SIGTERM), restarts on non-zero (crash). Prevents infinite restart loop on intentional shutdown.
 
-### Python removal and source cleanup
-- **All `.py` source files removed** — `src/*.py`, `src/exp/*.py`, `tests/*.py` deleted. Only GJS remains.
-- **`src/prod/` flattened** — 7 JS files moved to `src/` directly; all `imports.prod.*` changed to `imports.*`.
-- **Meson launchers rewritten** — `autowire.in` / `autowire-daemon.in` changed from Python to bash wrappers exec'ing `gjs` with dev-mode path detection.
-- **No GJS test suite** — all 60 Python tests were removed; zero JS test coverage exists.
-
-### Stream-aware BT auto-switching fixes
-- **`_fetch_capture_streams()` parsing fix** — `wpctl status` Streams sub-entries use space indentation (not `│` pipes). Rewrote regex and section parsing to correctly detect `input_*` / `output_*` stream targets.
-- **BT card-aware profile matching** — capture events fire with `bluez_input.XX.handsfree-headset` but profiles are keyed by `bluez_output.XX.a2dp-sink`. Added `_get_active_profile_for()` with exact-match → BT card fallback.
-- **Cross-card capture lookup** — `check_and_route_device()` used `_active_capture_nodes.has(output_name)` but captures stored by input name. Added `_any_active_capture_for()` checking all BT card siblings.
-- **Auto-route BT input/output** — when profile actions have empty `default_sink`/`default_source` for a BT device, daemon auto-discovers corresponding sink/source nodes via `bluez_card.MAC` and routes them.
-- **Bidirectional `_desc_to_name`** — `wp_monitor.js` now maps both `description → name` and `name → name` so stream target descriptions resolve correctly.
-
-### GJS Migration (primary runtime)
-- **GJS-first** — all source files ported from Python to GJS.
-- **Poll-based WpMonitor** — replaces Wp.ObjectManager (GJS bindings can't read proxy properties). Uses `wpctl status` + `wpctl inspect` in 3s poll cycle.
-- **Programmatic UI** — no Blueprint/GResource templates needed. All widgets built in code.
-- **Daemon reworked** — `GLibUnix.signal_add` for signal handling, `Gio.File.monitor` for config watching, numeric node ID resolution for wpctl.
-
-### Stream-aware auto-switching (initial)
-- **Capture stream detection** — `_poll_streams()` parses `wpctl status` Streams section, detects `input_*` sub-entries, maps target descriptions to node names. Emits `capture-started`/`capture-stopped` GObject signals.
-- **Auto-switch for calls** — daemon switches to `bt_profile_call` (e.g. HSP/HFP) on mic activity, restores `bt_profile` (e.g. AAC) after 3s debounce. Profile dialog has Call BT Profile + Auto-switch toggle.
-- **`_active_capture_nodes` tracking** — `check_and_route_device()` checks active capture state at routing time to select correct BT profile.
-
-### Profile enhancements
-- **`bt_profile_call` / `auto_switch` fields** — stored in profile actions for capture-aware BT codec switching.
-- **Multi-profile per trigger** — multiple named profiles per device enforced by `(trigger, name)` uniqueness.
-- **`is_active` field** — only one active profile per trigger. Daemon fires only active profiles.
-- **Active toggle** — `Gtk.Switch` on each row to activate/deactivate profiles without opening dialog.
-- **Startup routing** — daemon routes all connected nodes immediately on ready.
-
-### UI fixes
-- **Adw.AlertDialog constructor** — switched from positional args to `{heading, body}` object for Adw 1.5+ compatibility.
-- **Adw.Dialog child attachment** — added `this.set_child(content)` so dialog content renders.
-- **Dialog sizing** — set 460×540 minimum size for the profile dialog.
-- **Gtk.Switch active in constructor** — avoids spurious `notify::active` emissions.
-- **AboutDialog** — added with version, license, and links.
-
-### Capture-aware switching fixes
-- **`check_and_route_device` no longer checks capture state** — initial routing always uses `bt_profile` (AAC). Capture-aware switching (`bt_profile_call` / HSP/HFP) is handled exclusively by `handle_capture_started`/`handle_capture_stopped`, which are triggered by real capture stream transitions. This prevents false/stale capture detections from keeping the device stuck in HSP/HFP.
-- **`ready` handler re-applies capture profiles** — after initial routing, `daemon_main.js` now iterates `monitor.get_capture_nodes()` and calls `handle_capture_started` for each, ensuring active captures at startup correctly switch to `bt_profile_call`.
-- **New `get_capture_nodes()` method** on `WpMonitor` — returns node names with active capture counts > 0.
-
-### Flatpak & GJS compatibility fixes
-- **Wp typelib optional everywhere** — `main.js`, `daemon_main.js`, `wp_monitor.js` wrap Wp import/init in try-catch. Flatpak `org.gnome.Platform//50` lacks `Wp-0.5` typelib; all modules fall back to poll-only / sync mode.
-- **Profile dialog combo rows fixed** — all `Adw.PreferencesRow` widgets (EntryRow, ComboRow, SwitchRow) now inside an `Adw.PreferencesGroup` (required for ComboRow click handling). Header bar buttons compacted with `flat` + `valign: CENTER`.
-- **Async→sync device loading fallback** — `get_audio_nodes_async()` with 3s timeout; falls back to synchronous `get_audio_nodes_sync()` if async fails. New `get_audio_nodes_sync()` exported from `wp_monitor.js`.
-- **Icon cache rebuild in Flatpak build** — `gtk-update-icon-cache -f` added to manifest after icon install so about dialog finds the app icon.
-
-### Documentation
-- **All docs updated** — README, CONTRIBUTING, CHANGELOG, docs/architecture.md reflect GJS-primary status, Wp-optional architecture, and stream-aware features.
+### v0.3.12 — UI polish, daemon fixes, Flathub prep
+- **HSP→A2DP restore fixes** — `_bt_activate_after_delay()` retry after profile restore handles BT radio glitches; `_resolve_bt_sink_name()` permissive regex falls back to non-numeric-suffix names; 600ms delayed migration now re-asserts `set_system_default()` before stream migration.
+- **notify-send warnings fixed** — added `--icon=io.github.nidszxh.Autowire` and `Gio.SubprocessFlags.STDERR_SILENCE` to suppress stderr noise.
+- **Window close cleanup** — `close-request` signal calls `app.quit()`; `vfunc_dispose()` kills daemon subprocess via `force_exit()`.
+- **UI text refined** — about dialog and empty state descriptions tightened; removed tooltips from all header/row buttons.
+- **Empty state** — custom `Gtk.Box` layout replaces `Adw.StatusPage` for controlled spacing.
+- **Header "+" button** — hidden when no profiles exist; made flat (removed `suggested-action`).
+- **Profile dialog refactored** — profile name merged into main card (no separate frame); blue focus box killed via `outline-width: 0` per-widget CSS at `USER` priority; call profile restored as separate row sharing same device-filtered list as BT profile; BT labels stripped of parentheticals (`"LDAC"` not `"LDAC (high quality)"`); dialog sized 600×500.
+- **Main window** — 680×560 default size; trigger group titles show device name without `(N)` count.
+- **Profile rows** — clickable to edit via `activated` signal; pencil icon (`document-edit-symbolic`) always visible alongside move/delete buttons.
+- **Ctrl+N fix** — keyboard shortcut now calls `_on_add_clicked()` (was undefined `_show_add_dialog()`).
+- **Screenshots** — 4 PNGs added to `data/screenshots/` (main, profile, add, edit).
+- **metainfo update** — screenshots block added; test count 178→192; `APP_VERSION`→0.3.12.
+- **constants.js** — `APP_VERSION` updated to `'0.3.12'`.
+- **main.js** — unused `C = imports.constants` removed; SIGINT/SIGTERM handlers installed via `GLibUnix.signal_add()`.
+- **All 192 tests pass**.
 
 ## [0.3.11] - 2026-06-19
 

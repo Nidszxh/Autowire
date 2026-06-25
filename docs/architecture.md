@@ -73,7 +73,7 @@ Central location for all timing and interval constants. Consumed by `daemon.js`,
 - `RECONNECT_DELAY_S` (5) — WpMonitor reconnect delay on Wp.Core failure  
 - `FLASH_DURATION_MS` (1500) — UI highlight duration for active indicator (uses CSS `.highlight` class with opacity transition)
 - `FALLBACK_BT_PROFILE` (`'a2dp-sink'`) — BT profile to fall back to if card stays in `off`
-- `APP_VERSION` (`'0.3.11'`) — current application version
+- `APP_VERSION` (`'0.3.12'`) — current application version
 
 ### `log.js`
 Structured logging module with severity levels and timestamps.
@@ -114,16 +114,16 @@ Encapsulated in a `DaemonEngine` class (instantiated by `daemon_main.js`). Core 
 - `new DaemonEngine()` — initializes `_last_routed` (Map), `_capture_timers` (Map), `_capture_start_timers` (Map), `_active_capture_nodes` (Set), `_restoring_cards` (Set), `_activated_bt_cards` (Set)
 - `set_system_default(node_name, monitor)` → `boolean` — resolves node name to numeric PW ID via `wpctl inspect`, then `wpctl set-default <id>`. Returns `false` immediately if `node_name` is empty (BT auto-discovery of sink/source happens in `_apply_profile_actions`, not here).
 - `_reassert_default_sink(card_name, monitor)` → `boolean` — iterates `monitor.get_audio_nodes()` for the BT sink; if not found (stale cache), falls back to `_resolve_bt_sink_name()` which queries pactl in real-time. Calls `set_system_default` + `_migrate_streams_to_bt` on success.
-- `_resolve_bt_sink_name(card_name)` → `string|null` — queries `pactl list sinks` (real-time, bypasses monitor cache) and returns the current BT sink name matching the given card, or null.
-- `_migrate_streams_to_bt(bt_sink_name)` — queries `pactl list sink-inputs`, finds streams not already on the BT sink, and calls `pactl move-sink-input` to migrate them from ALSA to the restored BT sink. Used after HSP→A2DP restore to fix "no audio after call" when apps (Spotify, etc.) were still bound to the ALSA sink.
+- `_resolve_bt_sink_name(card_name)` → `string|null` — queries `pactl list sinks` (real-time, bypasses monitor cache) and returns the current BT sink name matching the given card. Prefers numeric-suffix names (e.g. `bluez_output.MAC.1` — A2DP sinks) but falls back to any `bluez_output.MAC.*` name when only the non-numeric variant exists.
+- `_migrate_streams_to_bt(bt_sink_name)` — queries `pactl list sink-inputs`, finds streams not already on the BT sink, and calls `pactl move-sink-input` to migrate them from ALSA to the restored BT sink. Used after HSP→A2DP restore to fix "no audio after call" when apps (Spotify, etc.) were still bound to the ALSA sink. The delayed 600ms migration also calls `set_system_default()` before migrating to re-assert the BT sink as default after pipewire-pulse registers the new sink.
 - `set_bt_profile(device_global_id, profile_name, card_pw_name)` → `boolean` — `wpctl set-profile <id> <profile>`. Uses `card_pw_name` to resolve the profile via `_resolve_bt_profile()` which calls `pickBest()` with the card's available profiles.
 - `check_and_route_device(node_name, monitor, force)` → `boolean` — loads profiles via `load_profiles_readonly()`, **skips any where `is_active != true`**, iterates ALL matching profiles and applies actions for each. Initial routing always uses `bt_profile`; capture-aware switching is handled by `handle_capture_started`/`handle_capture_stopped`.
 - `handle_capture_started(node_name, monitor)` — cancels restore timer, routes BT mic as default source, switches to `bt_profile_call`
 - `handle_capture_stopped(node_name, monitor)` — starts 3s debounce per card (via `_capture_timers` Map keyed by node_name), on expiry restores `bt_profile` and re-routes BT sink as default. Has early `_restoring_cards` guard to prevent re-entrancy when `set_bt_profile → _spawn_sync_with_timeout` runs a nested MainLoop.
 - `build_monitor()` → `WpMonitor` — creates monitor wired with `node-added`, `device-added`, `device-removed`, `node-removed` signals (capture-started/stopped are wired by `daemon_main.js` outside the `ready` handler to prevent duplicate handler chains on Wp.Core reconnect)
-- `activate_bt_card(global_id, card_name, monitor)` — called on `device-added` and during `ready`; checks if a BT card is in `off` state and an active profile targets it, then sets the best available profile. Has skip logic: if current profile is already the resolved target (`current !== 'off' && resolved === pid`), skips to avoid barging. If card stays in `off` after initial attempt, `_bt_activate_after_delay()` retries with `FALLBACK_BT_PROFILE` (`a2dp-sink`) after `BT_RETRY_DELAY_MS` (5000ms). Tracks already-activated cards via `_activated_bt_cards` Set.
+- `activate_bt_card(global_id, card_name, monitor)` — called on `device-added` and during `ready`; checks if a BT card is in `off` state and an active profile targets it, then sets the best available profile. Has skip logic: if current profile is already the resolved target (`current !== 'off' && resolved === pid`), skips to avoid barging. If card stays in `off` after initial attempt, `_bt_activate_after_delay()` retries with `FALLBACK_BT_PROFILE` (`a2dp-sink`) after `BT_RETRY_DELAY_MS` (5000ms). Tracks already-activated cards via `_activated_bt_cards` Set. After normal profile restore, also schedules `_bt_activate_after_delay()` to handle BT radio glitches or codec mismatches that leave the card in `off` state.
 - `clear_state()` — clears all routing cooldowns (`_last_routed`), capture timers (`_capture_timers`, `_capture_start_timers`), active capture set (`_active_capture_nodes`), and restoring guard (`_restoring_cards`). Preserves `_activated_bt_cards` (BT hardware survives PipeWire restarts). Called by `daemon_main.js` when the `ready` signal fires for a Wp.Core reconnection.
-- `_notify(summary, body)` — sends a desktop notification via `notify-send` subprocess (sanitized input, silently skipped if `notify-send` is not installed)
+- `_notify(summary, body)` — sends a desktop notification via `notify-send` subprocess with `--icon=io.github.nidszxh.Autowire` and `Gio.SubprocessFlags.STDERR_SILENCE` (sanitized input, silently skipped if `notify-send` is not installed)
 - Private methods: `_find_active_profile_for()` (exact + BT card fallback), `_bt_card_name()` (regex extractor), `_resolve_node_id()` (may run nested MainLoop), `_has_active_capture_on_card()`, `_apply_profile_actions()`, `_find_capture_profile()`, `_validate_profile()` (uses module-level `_VALID_BT_PROFILES` Set), `_spawn_sync_with_timeout()` (delegates to `utils.spawn_sync_with_timeout`), `clear_state()` (called on Wp.Core reconnect)
 
 ### `wp_monitor.js`
@@ -162,28 +162,34 @@ Daemon entry point (GLib only, zero GTK imports).
 GTK UI entry point.
 
 - `AutowireApplication` — `Adw.Application` subclass; `vfunc_activate()` shows or creates `AutowireWindow`
+- Installs SIGINT/SIGTERM handlers via `GLibUnix.signal_add()` for clean shutdown
+- Does not import `constants.js` (unused `C` import removed)
 
 ### `window.js`
-`AutowireWindow` — shows the profile list from `profiles.json`, grouped by trigger device.
+`AutowireWindow` — shows the profile list from `profiles.json`, grouped by trigger device (680×560 default size).
 
-- `refresh_profiles()` — clears and rebuilds `Adw.PreferencesGroup` hierarchy from disk. Shows empty page if no profiles exist.
-- `_group_by_trigger(profiles)` — groups profiles by `trigger_device_name` into nested `Adw.PreferencesGroup` per trigger
-- `_build_profile_row(profile, has_siblings)` — `Adw.ActionRow` with: `Gtk.Switch` for active state, Edit button (if single profile), Delete button (always). Applies `.highlight` CSS class for 1500ms on recently-activated profiles (replaces old `.error` class).
+- `close-request` signal calls `app.quit()` to trigger proper shutdown. `vfunc_dispose()` kills the daemon subprocess via `force_exit()`.
+- `refresh_profiles()` — clears and rebuilds `Adw.PreferencesGroup` hierarchy from disk. Shows a custom empty state (`Gtk.Box` with icon, title, description, and CTA button) when no profiles exist. Header "+" button is hidden on empty state.
+- `_group_by_trigger(profiles)` — groups profiles by `trigger_device_name` into nested `Adw.PreferencesGroup` per trigger. Group title shows just the device name (no `(N)` count suffix).
+- `_build_profile_row(profile, has_siblings)` — `Adw.ActionRow` with: `Gtk.Switch` for active state, Edit button (always visible, `document-edit-symbolic`), Delete button (always). Row is clickable to edit via `activated` signal. Move up/down buttons shown when `has_siblings`. No tooltips on any button.
 - `_on_switch_toggled(switch, profile)` — toggles `config_mgr.set_active_profile()` on/off and refreshes
 - Delete → `Adw.AlertDialog({heading, body})` confirmation → `config_mgr.delete_profile()`
-- **Keyboard shortcuts:** `Ctrl+N` (add profile), `Ctrl+Q` (quit), `F5` (refresh profiles)
+- **Keyboard shortcuts:** `Ctrl+N` (add profile, maps to `_on_add_clicked`), `Ctrl+Q` (quit), `F5` (refresh profiles)
 - **Import uses `dialog.open()`** — `Gtk.FileDialog` for importing must call `dialog.open()` + `open_finish()`, NOT `dialog.save()` + `save_finish()` (would show "Save As" instead of "Open File"). Export uses `dialog.save()` + `save_finish()` as expected.
 
 ### `profile_dialog.js`
-`ProfileDialog` — `Adw.Dialog` for create/edit.
+`ProfileDialog` — `Adw.Dialog` for create/edit (600×500).
 
 - Shows loading spinner immediately (async device fetch)
 - Device lists loaded via `get_audio_nodes_async()` cleanly avoiding UI freezes
-- All `Adw.PreferencesRow` subclasses (EntryRow, ComboRow, SwitchRow) are children of a single `Adw.PreferencesGroup` — required for ComboRow click handling
+- Profile name uses a `Gtk.Entry` inside `Adw.PreferencesRow` (no separate card frame); blue focus box removed via `outline-width: 0` on a per-widget `Gtk.CssProvider` at `USER` priority
+- BT Profile and Call Profile dropdowns share the same device-filtered list (no HSP/HFP-only filter on call)
+- Auto-switch is implicit — when a call profile (`bt_profile_call`) is set, auto-switch is automatically `true`; no separate toggle
 - `_on_devices_loaded(nodes)` sets `Gtk.StringList` models on ComboRows, validates, and prefills if editing
-- `_prefill(profile)` — pre-selects trigger/sink/source/BT-profile/Call-BT-profile/auto-switch based on saved values
+- `_prefill(profile)` — pre-selects trigger/sink/source/BT-profile/Call-BT-profile based on saved values
 - `_validate()` enables Save only when name is non-empty AND trigger is selected
-- `_on_save()` reads all selections including `bt_profile_call` and `auto_switch`, calls `config_mgr.save_profile({...})` with kwargs, emits `profile-saved`, closes
+- `_on_save()` reads all selections, calls `config_mgr.save_profile({...})` with kwargs, emits `profile-saved`, closes
+- BT labels stripped of parenthetical descriptions: `"LDAC"` instead of `"LDAC (high quality)"`
 
 ---
 
