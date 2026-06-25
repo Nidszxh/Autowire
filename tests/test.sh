@@ -29,15 +29,16 @@ run_test() {
 }
 
 if [ $# -eq 0 ]; then
-    for tf in "$SCRIPT_DIR"/test_*.js; do
-        [ -f "$tf" ] && run_test "$tf"
-    done
+    TEST_FILES=("$SCRIPT_DIR"/test_*.js)
 else
-    for tf in "$@"; do
-        run_test "$tf"
-    done
+    TEST_FILES=("$@")
 fi
 
+for tf in "${TEST_FILES[@]}"; do
+    [ -f "$tf" ] && run_test "$tf"
+done
+
+echo "Test suite"
 echo "================================================"
 if [ "$FAILED_ANY" -eq 0 ]; then
     echo "  ALL TESTS PASSED"

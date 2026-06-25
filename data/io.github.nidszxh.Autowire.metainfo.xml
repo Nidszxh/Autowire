@@ -65,6 +65,40 @@
   </screenshots>
 
   <releases>
+    <release version="0.3.12" date="2026-06-24">
+      <description>
+        <p>Production-hardening release: 163 tests, crash-safe subprocess I/O, WirePlumber restart recovery, and packaging fixes.</p>
+        <ul>
+          <li>WirePlumber restart recovery — capture signals wired outside ready handler; clear_state() purges stale routing on reconnect</li>
+          <li>BT device removal guard — daemon skips profile restore if the Bluetooth device was physically disconnected during a call</li>
+          <li>Eliminated all GLib.spawn_sync calls — centralized Gio.Subprocess+timeout utility prevents daemon hangs</li>
+          <li>Fixed pipe buffer deadlock — all subprocess I/O uses communicate_utf8_async instead of blocking wait_async</li>
+          <li>Fixed O(N) subprocess polling — known devices cached by global_id; no redundant wpctl inspect calls</li>
+          <li>Atomic file writes via GLib.file_set_contents directly — removed redundant GLib.rename wrapper that silently failed</li>
+          <li>Input validation for desktop notifications — summary/body truncated and sanitized before notify-send</li>
+          <li>Added log.js shared module — structured logging with levels, timestamps, file output, and 1MB rotation</li>
+          <li>Added spawn_sync_with_timeout in utils.js — reusable async subprocess with timeout for the entire codebase</li>
+          <li>Removed sync device loading — profile dialog uses async-only loading; no blocking fallback</li>
+          <li>163 GJS unit tests (new: test_utils.js, test_log.js) covering subprocess, parsing, BT profiles, config CRUD, daemon routing, and monitor parsing</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.11" date="2026-06-19">
+      <description>
+        <p>Production-ready release with 51 unit tests, Flatpak support, and capture-aware BT switching.</p>
+        <ul>
+          <li>Capture-aware auto-switching between A2DP (music) and HSP/HFP (calls)</li>
+          <li>Per-card debounce timers and restoring-state gating for reliable BT transitions</li>
+          <li>Source code refactored: constants, pactl parser, BT profiles, and utils extracted as shared modules</li>
+          <li>51 GJS unit tests covering config CRUD, daemon routing, and monitor parsing</li>
+          <li>Flatpak support with org.gnome.Platform//50 (Wp-0.5 typelib optional)</li>
+          <li>D-Bus session service for UI activation</li>
+          <li>Heartbeat-based daemon liveness detection in UI</li>
+          <li>Rename and overwrite protection in profile editor</li>
+          <li>PipeWire 1.6.6+ compatibility (&lt;/&gt; stream arrow detection)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2024-05-17">
       <description>
         <p>Initial release of Autowire.</p>

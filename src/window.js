@@ -1,11 +1,13 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
+const { is_flatpak } = imports.utils;
 const config_mgr = imports.config_mgr;
+const C = imports.constants;
 
 print('[Window] module loaded');
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = C.APP_VERSION;
 
 function _group_by_trigger(profiles) {
     const groups = {};
@@ -24,49 +26,73 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         super(kwargs);
         this._profiles_group = null;
         this._flashing_profiles = new Set();
-        this._config_monitor = null;
+        this._flash_timers = new Map();
+        this._switch_map = new Map();
+        this._toggling_guard = false;
         this._daemon_proc = null;
+        this._start_grace_timer = 0;
+        try {
+            const provider = new Gtk.CssProvider();
+            provider.load_from_string(
+                '.highlight { background-color: alpha(@accent_bg_color, 0.15); transition: background-color 1.5s ease-out; }'
+            );
+            Gtk.StyleContext.add_provider_for_display(
+                this.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            );
+        } catch (e) { /* CSS provider may fail in test environments */ }
+
         this._build_ui();
         this._connect_signals();
         this.refresh_profiles();
-        this._watch_config();
         this._ensure_daemon_running();
-        this._daemon_poll_id = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 15, () => {
+        this._daemon_poll_id = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, C.DAEMON_POLL_INTERVAL_S, () => {
             this._refresh_daemon_status();
             return GLib.SOURCE_CONTINUE;
         });
     }
 
+    vfunc_dispose() {
+        if (this._daemon_poll_id > 0) GLib.source_remove(this._daemon_poll_id);
+        if (this._start_grace_timer > 0) GLib.source_remove(this._start_grace_timer);
+        for (const id of this._flash_timers.values()) {
+            GLib.source_remove(id);
+        }
+        this._flash_timers.clear();
+        super.vfunc_dispose();
+    }
+
     _ensure_daemon_running() {
+        if (!this._has_active_profiles()) return;
         if (this._daemon_is_alive()) {
             this._refresh_daemon_status();
             return;
         }
         this._spawn_daemon();
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
+        if (this._start_grace_timer > 0) GLib.source_remove(this._start_grace_timer);
+        this._start_grace_timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.DAEMON_START_GRACE_MS, () => {
+            this._start_grace_timer = 0;
             this._refresh_daemon_status();
             return GLib.SOURCE_REMOVE;
         });
     }
 
-    _watch_config() {
+    _has_active_profiles() {
+        const profiles = config_mgr.load_profiles();
+        return profiles.some(p => p['is_active']);
+    }
+
+    _maybe_stop_daemon() {
+        if (this._has_active_profiles()) return;
+        if (!this._daemon_proc) return;
         try {
-            this._config_monitor = Gio.File.new_for_path(config_mgr.CONFIG_FILE).monitor(Gio.FileMonitorFlags.NONE, null);
-            this._config_monitor.connect('changed', (_mon, _file, _other, event) => {
-                if (event === Gio.FileMonitorEvent.CHANGES_DONE_HINT || event === Gio.FileMonitorEvent.CREATED) {
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                        this.refresh_profiles();
-                        return GLib.SOURCE_REMOVE;
-                    });
-                }
-            });
-        } catch (e) {
-            print(`[Window] WARNING: could not watch config: ${e}`);
-        }
+            this._daemon_proc.force_exit();
+        } catch (_) {}
+        this._daemon_proc = null;
+        this._daemon_banner.set_revealed(false);
     }
 
     _build_ui() {
-        this.set_default_size(480, 660);
+        this.set_default_size(720, 640);
         this.set_title('Autowire');
 
         this._toast_overlay = new Adw.ToastOverlay();
@@ -88,6 +114,17 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         });
         this._about_button.add_css_class('flat');
         header_bar.pack_start(this._about_button);
+
+        const menu_button = new Gtk.MenuButton({
+            icon_name: 'open-menu-symbolic',
+            tooltip_text: 'Import / Export',
+        });
+        menu_button.add_css_class('flat');
+        const menu_model = new Gio.Menu();
+        menu_model.append('Import Profiles…', 'win.import-profiles');
+        menu_model.append('Export Profiles…', 'win.export-profiles');
+        menu_button.set_menu_model(menu_model);
+        header_bar.pack_start(menu_button);
 
         toolbar_view.add_top_bar(header_bar);
 
@@ -133,6 +170,28 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         toolbar_view.set_content(this._main_stack);
         this._toast_overlay.set_child(toolbar_view);
         this.set_content(this._toast_overlay);
+
+        const add_profile_action = new Gio.SimpleAction({ name: 'add-profile' });
+        add_profile_action.connect('activate', () => { this._show_add_dialog(); });
+        this.add_action(add_profile_action);
+
+        const refresh_action = new Gio.SimpleAction({ name: 'refresh' });
+        refresh_action.connect('activate', () => { this.refresh_profiles(); });
+        this.add_action(refresh_action);
+
+        const import_action = new Gio.SimpleAction({ name: 'import-profiles' });
+        import_action.connect('activate', () => { this._on_import_clicked(); });
+        this.add_action(import_action);
+
+        const export_action = new Gio.SimpleAction({ name: 'export-profiles' });
+        export_action.connect('activate', () => { this._on_export_clicked(); });
+        this.add_action(export_action);
+
+        if (this.get_application()) {
+            this.get_application().set_accels_for_action('win.add-profile', ['<Ctrl>N']);
+            this.get_application().set_accels_for_action('win.refresh', ['F5']);
+            this.get_application().set_accels_for_action('app.quit', ['<Ctrl>Q']);
+        }
     }
 
     _connect_signals() {
@@ -143,6 +202,8 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     }
 
     refresh_profiles() {
+        this._switch_map.clear();
+
         const profiles = config_mgr.load_profiles();
         const error = config_mgr.read_error();
         if (error && error['message']) {
@@ -199,6 +260,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         const row = new Adw.ActionRow({ title: profileName, subtitle: subtitle });
 
         const sw = new Gtk.Switch({ valign: Gtk.Align.CENTER, active: profile['is_active'] || false });
+        this._switch_map.set(trigger + '|' + profileName, sw);
         sw.connect('notify::active', () => this._on_switch_toggled(sw, profile));
         row.add_suffix(sw);
 
@@ -245,11 +307,13 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         
         const profileKey = trigger + '|' + profileName;
         if (this._flashing_profiles && this._flashing_profiles.has(profileKey)) {
-            row.add_css_class('error');
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
-                row.remove_css_class('error');
+            row.add_css_class('highlight');
+            const timer_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.FLASH_DURATION_MS, () => {
+                this._flash_timers.delete(profileKey);
+                row.remove_css_class('highlight');
                 return GLib.SOURCE_REMOVE;
             });
+            this._flash_timers.set(profileKey, timer_id);
             this._flashing_profiles.delete(profileKey);
         }
         return row;
@@ -270,30 +334,33 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     }
 
     _on_switch_toggled(sw, profile) {
+        if (this._toggling_guard) return;
+        this._toggling_guard = true;
+
         const trigger = profile['trigger_device_name'] || '';
         const profileName = profile['profile_name'] || '';
         if (!trigger || !profileName) {
+            this._toggling_guard = false;
             return;
         }
 
         if (sw.get_active()) {
             config_mgr.set_active_profile(trigger, profileName);
             this._show_toast(`Activated: ${profileName}`);
-            // Flash the newly activated profile.
             this._flashing_profiles.add(trigger + '|' + profileName);
+            for (const [key, siblingSw] of this._switch_map) {
+                if (key.startsWith(trigger + '|') && key !== trigger + '|' + profileName) {
+                    siblingSw.set_active(false);
+                }
+            }
+            this._ensure_daemon_running();
         } else {
             config_mgr.set_active_profile(trigger, '');
             this._show_toast(`Deactivated: ${profileName}`);
+            this._maybe_stop_daemon();
         }
 
-        // Defer the rebuild to the next idle cycle so the switch's
-        // `notify::active` signal is fully processed before we tear down the
-        // row. Rebuilding synchronously can swallow the click and leave the
-        // switch stuck in its previous state.
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this.refresh_profiles();
-            return GLib.SOURCE_REMOVE;
-        });
+        this._toggling_guard = false;
     }
 
     _on_move_up_clicked(profile) {
@@ -341,6 +408,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
                 config_mgr.delete_profile(trigger, profileName);
                 this._show_toast(`Deleted: ${profileName}`);
                 this.refresh_profiles();
+                this._maybe_stop_daemon();
             }
         });
         alert.present(this);
@@ -359,6 +427,48 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         about.present(this);
     }
 
+    _on_import_clicked() {
+        const dialog = new Gtk.FileDialog();
+        dialog.set_title('Import Profiles');
+        dialog.open(this, null, (dlg, result) => {
+            try {
+                const file = dlg.open_finish(result);
+                const path = file.get_path();
+                if (!config_mgr.import_profiles(path)) {
+                    this._show_toast('Import failed: invalid file');
+                    return;
+                }
+                this.refresh_profiles();
+                this._show_toast('Profiles imported');
+            } catch (e) {
+                if (e.code !== Gtk.DialogError.DISMISSED) {
+                    this._show_toast('Import failed');
+                }
+            }
+        });
+    }
+
+    _on_export_clicked() {
+        const dialog = new Gtk.FileDialog();
+        dialog.set_title('Export Profiles');
+        dialog.set_initial_name('autowire-profiles.json');
+        dialog.save(this, null, (dlg, result) => {
+            try {
+                const file = dlg.save_finish(result);
+                const path = file.get_path();
+                if (config_mgr.export_profiles(path)) {
+                    this._show_toast('Profiles exported');
+                } else {
+                    this._show_toast('Export failed');
+                }
+            } catch (e) {
+                if (e.code !== Gtk.DialogError.DISMISSED) {
+                    this._show_toast('Export failed');
+                }
+            }
+        });
+    }
+
     _daemon_heartbeat_path() {
         return GLib.build_filenamev([config_mgr.CONFIG_DIR, 'daemon.heartbeat']);
     }
@@ -370,13 +480,17 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
             if (!file.query_exists(null)) return false;
             const info = file.query_info('time::modified', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
             const mtime = info.get_modification_date_time().to_unix();
-            return (Math.floor(Date.now() / 1000) - mtime) <= 45;
+            return (Math.floor(Date.now() / 1000) - mtime) <= C.HEARTBEAT_ALIVE_THRESHOLD_S;
         } catch (e) {
             return false;
         }
     }
 
     _refresh_daemon_status() {
+        if (!this._has_active_profiles()) {
+            this._daemon_banner.set_revealed(false);
+            return;
+        }
         const alive = this._daemon_is_alive();
         this._daemon_banner.set_revealed(!alive);
         if (!alive) {
@@ -385,12 +499,18 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
     }
 
     _spawn_daemon() {
-        if (this._daemon_proc) return this._daemon_proc;
+        // Kill stale subprocess handle before spawning a new daemon.
+        if (this._daemon_proc) {
+            if (this._daemon_is_alive()) return this._daemon_proc;
+            try {
+                this._daemon_proc.force_exit();
+            } catch (_) { /* ignore */ }
+            this._daemon_proc = null;
+        }
 
-        const is_flatpak = GLib.file_test('/.flatpak-info', GLib.FileTest.EXISTS);
         let argv;
         if (is_flatpak) {
-            argv = ['flatpak-spawn', '--host', 'flatpak', 'run', '--branch=stable', 'io.github.nidszxh.Autowire.Daemon'];
+            argv = ['flatpak-spawn', '--host', 'flatpak', 'run', '--command=autowire-daemon', '--branch=stable', 'io.github.nidszxh.Autowire'];
         } else {
             const exe = 'gjs';
             const exe_path = GLib.find_program_in_path(exe);
@@ -413,11 +533,22 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         }
 
         try {
-            // Inherit stdout/stderr so the child can write freely without the
-            // parent having to drain pipes (otherwise print() in the daemon
-            // can block once the pipe buffer fills).
+            // Inherit stdio to avoid pipe buffer blocking the daemon's print().
             const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
             this._daemon_proc = proc;
+
+            // Immediate death detection via wait_async (vs. heartbeat's 15s delay).
+            proc.wait_async(null, () => {
+                if (!this._daemon_proc) return;
+                try {
+                    const exited = proc.get_exit_status();
+                    print(`[Window] Daemon exited with status ${exited}`);
+                } catch (_) { /* already reaped */ }
+                if (this._daemon_is_alive()) return;
+                this._daemon_proc = null;
+                this._ensure_daemon_running();
+            });
+
             return proc;
         } catch (e) {
             this._show_toast(`Failed to start daemon: ${e.message || e}`);
@@ -434,7 +565,9 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         const proc = this._spawn_daemon();
         if (proc) {
             this._show_toast('Daemon starting…');
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
+            if (this._start_grace_timer > 0) GLib.source_remove(this._start_grace_timer);
+            this._start_grace_timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.DAEMON_START_GRACE_MS, () => {
+                this._start_grace_timer = 0;
                 this._refresh_daemon_status();
                 return GLib.SOURCE_REMOVE;
             });

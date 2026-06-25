@@ -1,0 +1,21 @@
+/**
+ * Shared timing and configuration constants.
+ * Single source of truth — avoids magic number dispersion across modules.
+ */
+
+var POLL_INTERVAL_MS = 3000;
+var CONFIG_CHANGE_DEBOUNCE_MS = 500;
+var ROUTING_COOLDOWN_S = 5.0;
+var CAPTURE_DEBOUNCE_MS = 3000;
+var CAPTURE_START_DEBOUNCE_MS = 1500;
+var HEARTBEAT_INTERVAL_S = 30;
+var HEARTBEAT_ALIVE_THRESHOLD_S = 45;
+var DAEMON_START_GRACE_MS = 2500;
+var STATUS_TIMEOUT_MS = 4000;
+var BT_RETRY_DELAY_MS = 5000;
+var DAEMON_POLL_INTERVAL_S = 15;
+var FLASH_DURATION_MS = 1500;
+var RECONNECT_DELAY_S = 5;
+var FALLBACK_BT_PROFILE = 'a2dp-sink';
+var SYNC_FALLBACK_TIMEOUT_MS = 3000;
+var APP_VERSION = '0.3.11';

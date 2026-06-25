@@ -18,8 +18,15 @@ install_data(
   install_dir: datadir / 'systemd' / 'user',
 )
 
+service_conf = configuration_data()
+service_conf.merge_from(conf)
+dbus_service = configure_file(
+  input: 'io.github.nidszxh.Autowire.service.in',
+  output: 'io.github.nidszxh.Autowire.service',
+  configuration: service_conf,
+)
 install_data(
-  'io.github.nidszxh.Autowire.service',
+  dbus_service,
   install_dir: datadir / 'dbus-1' / 'session-services',
 )
 

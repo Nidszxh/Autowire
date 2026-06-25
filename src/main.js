@@ -11,18 +11,16 @@ try {
 }
 
 const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
+const C = imports.constants;
 
 print('[Main] module loaded');
 
-const APP_VERSION = '0.1.0';
-
 const AutowireApplication = GObject.registerClass(class AutowireApplication extends Adw.Application {
-    constructor(version) {
+    constructor() {
         super({
             application_id: 'io.github.nidszxh.Autowire',
             flags: Gio.ApplicationFlags.DEFAULT_FLAGS,
         });
-        this._version = version;
     }
 
     vfunc_activate() {
@@ -35,9 +33,9 @@ const AutowireApplication = GObject.registerClass(class AutowireApplication exte
     }
 });
 
-function main(version) {
-    const app = new AutowireApplication(version || APP_VERSION);
-    return app.run(['']);
+function main() {
+    const app = new AutowireApplication();
+    return app.run([GLib.get_prgname() || 'autowire']);
 }
 
-main(APP_VERSION);
+main();

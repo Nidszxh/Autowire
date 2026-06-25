@@ -33,10 +33,9 @@ function assert_false(actual, msg) {
 
 print('\n=== ConfigMgr Tests ===\n');
 
-// Note: these test core logic inline to avoid GI dependency issues.
-// Full integration tests require overwriting config_mgr's globals.
+// Tests use inline logic to avoid GI dependency issues.
 
-// Per-trigger migration test
+// Per-trigger migration
 function test_migration() {
     const profiles = [
         { profile_name: 'Music', trigger_device_name: 'bluez_output.AA_BB_CC_DD_EE_FF.1', is_active: false },
@@ -138,7 +137,7 @@ function test_reorder_down() {
         { profile_name: 'C', trigger_device_name: 'dev1' },
     ];
 
-    // Move A down (swap with B)
+    // Move A down — swap with B
     const idx = profiles.findIndex(p => p['profile_name'] === 'A' && p['trigger_device_name'] === 'dev1');
     let nextIdx = -1;
     for (let i = idx + 1; i < profiles.length; i++) {
@@ -157,7 +156,7 @@ function test_reorder_boundary() {
         { profile_name: 'B', trigger_device_name: 'dev1' },
     ];
 
-    // Move A up — should be no-op (already at top)
+    // Move A up — no-op, already at top
     const idx = profiles.findIndex(p => p['profile_name'] === 'A');
     let prevIdx = -1;
     for (let i = idx - 1; i >= 0; i--) {
@@ -165,7 +164,7 @@ function test_reorder_boundary() {
     }
     assert_eq(-1, prevIdx, 'reorder boundary: no previous element for top item');
 
-    // Move B down — should be no-op (already at bottom)
+    // Move B down — no-op, already at bottom
     const idx2 = profiles.findIndex(p => p['profile_name'] === 'B');
     let nextIdx = -1;
     for (let i = idx2 + 1; i < profiles.length; i++) {
@@ -175,10 +174,12 @@ function test_reorder_boundary() {
 }
 
 function test_validate_profile() {
+    // Must match src/daemon.js _VALID_BT_PROFILES
     const valid_bt = new Set([
         'a2dp-sink-aac', 'a2dp-sink-ldac', 'a2dp-sink-aptx',
-        'a2dp-sink-aptx_hd', 'a2dp-sink-sbc_xq', 'a2dp-sink-sbc',
-        'handsfree-headset',
+        'a2dp-sink-aptx_hd', 'a2dp-sink-sbc_xq', 'a2dp-sink',
+        'a2dp-sink-sbc', 'handsfree-headset', 'headset-head-unit',
+        '',
     ]);
 
     function validate(p) {

@@ -42,6 +42,10 @@ install_data(
   'daemon_main.js',
   'wp_monitor.js',
   'utils.js',
+  'bt_profiles.js',
+  'pactl_parser.js',
+  'constants.js',
+  'log.js',
   install_dir: pkgdatadir_conf,
   install_mode: 'r--r--r--',
 )

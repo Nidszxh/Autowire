@@ -1,9 +1,11 @@
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, GObject, GLib, Gio, Gtk } = imports.gi;
-const { get_pactl_cmd } = imports.utils;
 const config_mgr = imports.config_mgr;
+const C = imports.constants;
 const wp_monitor = imports.wp_monitor;
+const bt_profiles = imports.bt_profiles;
+const pactl_parser = imports.pactl_parser;
 
 print('[ProfileDialog] module loaded');
 
@@ -18,65 +20,25 @@ const BT_PROFILES = [
     ['a2dp-sink', 'A2DP (codec auto)'],
     ['a2dp-sink-sbc_xq', 'SBC-XQ (high quality)'],
     ['a2dp-sink-sbc', 'SBC (standard)'],
-    ['handsfree-headset', 'HSP/HFP (call / mSBC)'],
-];
-
-// Highest quality first. Used for auto-detection.
-const BT_QUALITY_ORDER = [
-    'a2dp-sink-ldac',
-    'a2dp-sink-aptx_hd',
-    'a2dp-sink-aptx',
-    'a2dp-sink-aac',
-    'a2dp-sink',
-    'a2dp-sink-sbc_xq',
-    'a2dp-sink-sbc',
+    ['handsfree-headset', 'HSP/HFP handsfree (call / mSBC)'],
+    ['headset-head-unit', 'HSP/HFP headset (call / CVSD)'],
 ];
 
 /**
- * Parse `pactl list cards` and return a map of card_name -> available profile names.
+ * Get available BT profiles per card from pactl.
  * @returns {Object<string, string[]>}
  */
 function _list_card_profiles() {
-    const out = {};
-    try {
-        const [ok, stdout] = GLib.spawn_sync(
-            null, get_pactl_cmd().concat(['list', 'cards']),
-            null, GLib.SpawnFlags.SEARCH_PATH, null
-        );
-        if (!ok) return out;
-        const text = new TextDecoder().decode(stdout);
-        let current_card = null;
-        let in_profiles = false;
-        for (const raw_line of text.split('\n')) {
-            const line = raw_line.trim();
-            if (line.startsWith('Name: ')) {
-                current_card = line.substring(6).trim();
-                out[current_card] = [];
-                in_profiles = false;
-            } else if (current_card && line === 'Profiles:') {
-                in_profiles = true;
-            } else if (current_card && in_profiles && line && !line.startsWith('Active Profile:')) {
-                const m = line.match(/^([\w\-+.]+):\s/);
-                if (m) {
-                    out[current_card].push(m[1]);
-                }
-            } else if (current_card && line === '' && in_profiles) {
-                in_profiles = false;
-            }
-        }
-    } catch (e) {
-    }
-    return out;
+    return pactl_parser.listAllCardProfiles();
 }
 
 /**
- * Pick the best BT profile for a device that supports input/output switching.
- * `trigger_node_name` is a node name like 'bluez_output.XX_XX_...'.
+ * Auto-pick the best BT profile for the trigger device.
  * Returns '' if no preference can be inferred.
  */
 function _auto_pick_bt_profile(trigger_node_name) {
     if (!trigger_node_name || !trigger_node_name.startsWith('bluez_')) return '';
-    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{14,17})/);
+    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{17})/);
     if (!mac_match) return '';
     const mac_dotted = mac_match[1].replace(/_/g, ':');
     const card_name = `bluez_card.${mac_match[1]}`;
@@ -87,37 +49,23 @@ function _auto_pick_bt_profile(trigger_node_name) {
         const names = Object.keys(cards);
         for (const n of names) {
             if (n.startsWith('bluez_card.') && n.toLowerCase().includes(mac_match[1].toLowerCase())) {
-                return _pick_best(available.concat(cards[n] || []));
+                return bt_profiles.pickBest(available.concat(cards[n] || []));
             }
         }
         return '';
     }
-    return _pick_best(available);
+    return bt_profiles.pickBest(available);
 }
 
-function _pick_best(available) {
-    for (const cand of BT_QUALITY_ORDER) {
-        if (available.includes(cand)) return cand;
-    }
-    return '';
-}
-
-/**
- * Return a Set of profile names the bluez card behind `trigger_node_name`
- * actually exposes, or null when the trigger isn't a bluez device (in which
- * case the ComboRow should keep the full BT_PROFILES list, just disabled).
- */
 function _list_card_profiles_for_trigger(trigger_node_name) {
     if (!trigger_node_name || !trigger_node_name.startsWith('bluez_')) return null;
-    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{14,17})/);
+    const mac_match = trigger_node_name.match(/^bluez_(?:output|input)\.([0-9A-Fa-f_]{17})/);
     if (!mac_match) return null;
     const card_name = `bluez_card.${mac_match[1]}`;
     const cards = _list_card_profiles();
     const available = new Set(cards[card_name] || []);
     if (available.size === 0) {
-        // The card may not be in `pactl list cards` yet (e.g. right after
-        // pairing). Return an empty set so the ComboRow shows only the
-        // "Don't change" option — better than showing a wrong profile.
+        // Card may not be in pactl yet; return empty so only "Don't change" shows.
         return available;
     }
     return available;
@@ -130,11 +78,13 @@ var ProfileDialog = GObject.registerClass({
 }, class AutowireProfileDialog extends Adw.Dialog {
     constructor(kwargs) {
         const profile = kwargs?.profile || null;
-        delete kwargs?.profile;
+        if (kwargs) delete kwargs.profile;
         super(kwargs);
 
         this.set_title(profile ? 'Edit Profile' : 'Add Profile');
         this._profile = profile;
+        this._originalName = profile ? profile['profile_name'] : null;
+        this._originalTrigger = profile ? profile['trigger_device_name'] : null;
         this._all_nodes = [];
         this._sink_nodes = [];
         this._source_nodes = [];
@@ -151,10 +101,14 @@ var ProfileDialog = GObject.registerClass({
 
     _setup_ui() {
         const content = new Adw.ToolbarView();
-        content.set_size_request(460, 540);
+        content.set_size_request(480, 560);
 
+        const title_label = new Gtk.Label({
+            label: `<b>${this._profile ? 'Edit Profile' : 'Add Profile'}</b>`,
+            use_markup: true,
+        });
         const header_bar = new Adw.HeaderBar({
-            title_widget: new Gtk.Label({ label: this._profile ? 'Edit Profile' : 'Add Profile' }),
+            title_widget: title_label,
         });
 
         this._cancel_button = new Gtk.Button({ label: 'Cancel' });
@@ -246,13 +200,11 @@ var ProfileDialog = GObject.registerClass({
 
     _load_devices_async() {
         let completed = false;
-        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.SYNC_FALLBACK_TIMEOUT_MS, () => {
             if (!completed) {
-                print('[ProfileDialog] Async device loading timed out, falling back to sync');
-                const nodes = wp_monitor.get_audio_nodes_sync();
-                this._on_devices_loaded(nodes);
+                print('[ProfileDialog] Async device loading timed out, continuing wait...');
             }
-            return GLib.SOURCE_REMOVE;
+            return GLib.SOURCE_CONTINUE;
         });
 
         wp_monitor.get_audio_nodes_async(nodes => {
@@ -305,17 +257,15 @@ var ProfileDialog = GObject.registerClass({
     }
 
     /**
-     * Replace the BT profile ComboRows' models with the subset of BT_PROFILES
-     * that the currently-selected trigger device actually supports. Falls back
-     * to the full list for non-BT triggers (where the rows stay disabled).
+     * Filter BT profile options to what the selected trigger device supports.
      */
     _refresh_bt_profile_options() {
         const idx = this._trigger_row.get_selected();
         const node = (idx !== _INVALID && idx < this._all_nodes.length) ? this._all_nodes[idx] : null;
         const triggerName = node ? (node['name'] || '') : '';
         const deviceProfiles = _list_card_profiles_for_trigger(triggerName);
-        // Map common names to PipeWire names the device may expose:
-        //   handsfree-headset → headset-head-unit
+        const isBt = deviceProfiles !== null;
+        // Map common profile name variations
         const mapped = deviceProfiles ? new Set(deviceProfiles) : null;
         if (mapped && mapped.has('headset-head-unit')) mapped.add('handsfree-headset');
         if (mapped && mapped.has('handsfree-headset')) mapped.add('headset-head-unit');
@@ -328,6 +278,9 @@ var ProfileDialog = GObject.registerClass({
         this._bt_profile_row.set_model(Gtk.StringList.new(labels));
         this._bt_profile_call_row.set_model(Gtk.StringList.new(labels));
         this._bt_profile_keys = filtered.map(([key]) => key);
+        this._bt_profile_row.set_sensitive(isBt);
+        this._bt_profile_call_row.set_sensitive(isBt);
+        this._auto_switch_row.set_sensitive(isBt);
         // Re-select previously chosen values if they're still available.
         if (previousKey) this._select_bt_profile(previousKey);
         if (previousCallKey) this._select_bt_profile_call(previousCallKey);
@@ -403,8 +356,6 @@ var ProfileDialog = GObject.registerClass({
         const triggerIdx = this._trigger_row.get_selected();
         const sinkIdx = this._sink_row.get_selected();
         const sourceIdx = this._source_row.get_selected();
-        const btIdx = this._bt_profile_row.get_selected();
-
         if (!name || triggerIdx === _INVALID) return;
 
         const triggerNode = this._all_nodes[triggerIdx];
@@ -417,17 +368,7 @@ var ProfileDialog = GObject.registerClass({
         const autoSwitch = this._auto_switch_row.get_active();
         const isActive = this._active_row.get_active();
 
-        // If editing and the key (name or trigger) changed, delete the old
-        // profile first so we don't leave an orphan behind.
-        if (this._originalName !== null && this._originalTrigger !== null) {
-            const keyChanged = name !== this._originalName || triggerDevice !== this._originalTrigger;
-            if (keyChanged) {
-                config_mgr.delete_profile(this._originalTrigger, this._originalName);
-            }
-        }
-
-        // Duplicate detection: if adding a new profile and one with the same
-        // name+trigger already exists, confirm overwrite.
+        // Check for duplicate name+trigger before saving.
         const isEditingExisting = this._originalName !== null
             && this._originalTrigger !== null
             && name === this._originalName
@@ -473,6 +414,8 @@ var ProfileDialog = GObject.registerClass({
             btProfileCall: btProfileCallKey,
             autoSwitch,
             display: triggerDisplay,
+            originalName: this._originalName,
+            originalTrigger: this._originalTrigger,
         });
         this.emit('profile-saved');
         this.close();

@@ -1,5 +1,6 @@
 const { GLib, GObject, Gio } = imports.gi;
-const { get_wpctl_cmd } = imports.utils;
+const { get_wpctl_cmd, strip_tree_chars, spawn_sync_with_timeout } = imports.utils;
+const C = imports.constants;
 
 let Wp = null;
 try {
@@ -12,7 +13,7 @@ try {
 
 print('[WpMonitor] module loaded');
 
-const _POLL_INTERVAL_MS = 3000;
+const _POLL_INTERVAL_MS = C.POLL_INTERVAL_MS;
 
 var WpMonitor = GObject.registerClass({
     Signals: {
@@ -33,7 +34,8 @@ var WpMonitor = GObject.registerClass({
         this._nodes = {};
         this._devices = {};
         this._capture_counts = {};
-        this._desc_to_name = {};
+        this._desc_to_id = {};
+        this._id_to_node = {};
         this._ready = false;
     }
 
@@ -56,7 +58,7 @@ var WpMonitor = GObject.registerClass({
                 this._poll_id = 0;
             }
             this._ready = false;
-            GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, C.RECONNECT_DELAY_S, () => {
                 if (this._core) {
                     print('[WpMonitor] Attempting reconnection…');
                     this._core.connect();
@@ -79,7 +81,8 @@ var WpMonitor = GObject.registerClass({
         this._nodes = {};
         this._devices = {};
         this._capture_counts = {};
-        this._desc_to_name = {};
+        this._desc_to_id = {};
+        this._id_to_node = {};
         this._ready = false;
     }
 
@@ -110,6 +113,26 @@ var WpMonitor = GObject.registerClass({
         return dev ? dev['global_id'] : null;
     }
 
+    /**
+     * Resolve a device name to a global ID, with wpctl status fallback.
+     * @param {string} device_name
+     * @returns {number|null}
+     */
+    resolveDeviceGlobalId(device_name) {
+        const id = this.get_device_global_id(device_name);
+        if (id) return id;
+        // Fallback: parse Devices section from wpctl status directly in case
+        // the poll hasn't reached this device yet.
+        const devices = _fetch_devices_from_wpctl();
+        for (const dev of devices) {
+            if (dev['pw_name'] === device_name) {
+                this._devices[device_name] = dev;
+                return dev['global_id'];
+            }
+        }
+        return null;
+    }
+
     get_capture_nodes() {
         return Object.entries(this._capture_counts)
             .filter(([, count]) => count > 0)
@@ -119,15 +142,23 @@ var WpMonitor = GObject.registerClass({
     _poll() {
         if (this._polling) return;
         this._polling = true;
+        const fail_safe_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.STATUS_TIMEOUT_MS + 1000, () => {
+            if (this._polling) {
+                print('[WpMonitor] Poll fail-safe: resetting _polling flag');
+                this._polling = false;
+            }
+            return GLib.SOURCE_REMOVE;
+        });
         _fetch_wpctl_status_async(status_text => {
+            if (fail_safe_id > 0) GLib.source_remove(fail_safe_id);
             this._polling = false;
             if (!status_text) {
                 print('[WpMonitor] Poll skipped: wpctl status failed or timed out');
                 return;
             }
             this._poll_devices(status_text);
-            this._poll_streams(status_text);
             this._poll_nodes(status_text);
+            this._poll_streams(status_text);
             if (!this._ready) {
                 this._ready = true;
                 this.emit('ready');
@@ -140,9 +171,19 @@ var WpMonitor = GObject.registerClass({
         const current_names = new Set(current.map(n => n['name']));
         const prev_names = new Set(Object.keys(this._nodes));
 
+        // Rebuild maps each poll to avoid stale entries and description collisions.
+        this._desc_to_id = {};
+        this._id_to_node = {};
+
         for (const node of current) {
-            this._desc_to_name[node['description']] = node['name'];
-            this._desc_to_name[node['name']] = node['name'];
+            if (node['id']) {
+                this._id_to_node[node['id']] = node;
+            }
+            if (node['description']) {
+                this._desc_to_id[node['description']] = node['id'];
+            }
+            // Map node.name → id for stream resolution by name
+            this._desc_to_id[node['name']] = node['id'];
 
             if (!prev_names.has(node['name'])) {
                 this._nodes[node['name']] = node;
@@ -154,7 +195,6 @@ var WpMonitor = GObject.registerClass({
         for (const name of prev_names) {
             if (!current_names.has(name)) {
                 delete this._nodes[name];
-                delete this._capture_counts[name];
                 print(`[WpMonitor] Node removed: ${name}`);
                 this.emit('node-removed', name);
             }
@@ -162,17 +202,12 @@ var WpMonitor = GObject.registerClass({
     }
 
     _poll_devices(status_text) {
-        const current = _fetch_devices_from_wpctl(status_text);
-        const current_names = new Set();
-        for (const dev of current) {
-            current_names.add(dev['name']);
-            current_names.add(dev['pw_name']);
-        }
+        const current = _fetch_devices_from_wpctl(status_text, this._devices);
+        const current_names = new Set(current.map(d => d['pw_name']));
         const prev_names = new Set(Object.keys(this._devices));
 
         for (const dev of current) {
-            if (!prev_names.has(dev['name'])) {
-                this._devices[dev['name']] = dev;
+            if (!prev_names.has(dev['pw_name'])) {
                 this._devices[dev['pw_name']] = dev;
                 print(`[WpMonitor] Device added: ${dev['name']} (${dev['pw_name']}) global_id=${dev['global_id']}`);
                 this.emit('device-added', dev['name'], dev['description'], dev['global_id'], dev['pw_name']);
@@ -198,7 +233,12 @@ var WpMonitor = GObject.registerClass({
 
         const new_counts = {};
         for (const [target_desc, count] of Object.entries(capture_by_target)) {
-            const node_name = this._desc_to_name[target_desc] || target_desc;
+            const node_id = this._desc_to_id[target_desc];
+            const node = node_id ? this._id_to_node[node_id] : null;
+            // Skip VU meter and loopback streams on sink nodes.
+            // Only bluez_input.* (Audio/Source) captures trigger BT switching.
+            if (node && node['media_class'] === 'Audio/Sink') continue;
+            const node_name = node ? node['name'] : target_desc;
             new_counts[node_name] = count;
         }
 
@@ -221,18 +261,11 @@ var WpMonitor = GObject.registerClass({
     }
 });
 
-function _strip_tree_chars(s) {
-    return s.replace(/^[│├└─\s]+/, '');
-}
-
 function _fetch_wpctl_status() {
     try {
-        const [ok, stdout] = GLib.spawn_sync(
-            null, get_wpctl_cmd().concat(['status']),
-            null, GLib.SpawnFlags.SEARCH_PATH, null
-        );
+        const [ok, stdout] = spawn_sync_with_timeout(get_wpctl_cmd().concat(['status']), 5000);
         if (!ok) return '';
-        return new TextDecoder().decode(stdout);
+        return stdout;
     } catch (e) {
         return '';
     }
@@ -246,21 +279,21 @@ function _fetch_wpctl_status_async(callback) {
         );
 
         let timed_out = false;
-        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4000, () => {
+        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.STATUS_TIMEOUT_MS, () => {
             timed_out = true;
             print('[WpMonitor] wpctl status timed out');
             proc.force_exit();
             return GLib.SOURCE_REMOVE;
         });
 
-        proc.wait_async(null, () => {
-            GLib.source_remove(timeout_id);
+        proc.communicate_utf8_async(null, null, (p, res) => {
             if (timed_out) {
                 callback('');
                 return;
             }
+            GLib.source_remove(timeout_id);
             try {
-                const [, stdout] = proc.communicate_utf8(null, null);
+                const [, stdout] = p.communicate_utf8_finish(res);
                 callback(stdout || '');
             } catch (e) {
                 callback('');
@@ -277,14 +310,11 @@ function _fetch_capture_streams(status_text) {
     const capture_by_target = {};
 
     let in_streams = false;
-    // Capture streams use 'port < device' (stream receives from device);
-    // output streams use 'port > device' (stream sends to device). Match both.
-    const port_re = /\d+\.\s+(\S+)\s*[<>]\s*(.+?):\S+\s+\[(active|init)\]/;
 
     for (const line of lines) {
         const stripped = line.trim();
 
-        const clean = _strip_tree_chars(stripped);
+        const clean = strip_tree_chars(stripped);
 
         if (clean === 'Streams:' || clean === '├─ Streams:' || clean === '└─ Streams:') {
             in_streams = true;
@@ -300,11 +330,19 @@ function _fetch_capture_streams(status_text) {
             continue;
         }
 
-        const port_m = clean.match(port_re);
-        if (port_m) {
-            const port_name = port_m[1];
-            if (port_name.startsWith('input_')) {
-                const target = port_m[2].trim();
+        const dir_m = clean.match(/^\d+\.\s+([\w-]+)\s+([<>])\s+(.+?)\s+\[.*\]$/);
+        if (!dir_m) continue;
+
+        const port_name = dir_m[1];
+        const arrow = dir_m[2];
+        const right_side = dir_m[3].trim();
+
+        // PW <1.6 uses >, PW >=1.6 uses < for input ports; handle both.
+        if (port_name.startsWith('input_') && (arrow === '<' || arrow === '>')) {
+            // Extract device description from "description:port_name".
+            const last_colon = right_side.lastIndexOf(':');
+            const target = last_colon > 0 ? right_side.substring(0, last_colon).trim() : right_side;
+            if (target) {
                 capture_by_target[target] = (capture_by_target[target] || 0) + 1;
             }
         }
@@ -330,7 +368,7 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
 
     for (const line of status_text.split('\n')) {
         const stripped = line.trim();
-        const clean = _strip_tree_chars(stripped);
+        const clean = strip_tree_chars(stripped);
         if (clean === 'Sinks:' || clean === '├─ Sinks:' || clean === '└─ Sinks:') {
             in_sinks = true;
             in_sources = false;
@@ -357,6 +395,8 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
 
         if (!(in_sinks || in_sources)) continue;
 
+        if (/\boff\b/.test(line)) continue;
+
         const m = line.match(/\s+│\s+(?:\*\s*)?(\d+)\.\s+(.+?)(?:\s+\[.*\])?$/);
         if (!m) continue;
 
@@ -382,15 +422,9 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
         }
 
         try {
-            const [ok2, inspect_stdout] = GLib.spawn_sync(
-                null,
-                get_wpctl_cmd().concat(['inspect', String(node_id)]),
-                null,
-                GLib.SpawnFlags.SEARCH_PATH,
-                null
-            );
+            const [ok2, inspect_stdout] = spawn_sync_with_timeout(get_wpctl_cmd().concat(['inspect', String(node_id)]), 2000);
             if (ok2) {
-                for (const iline of new TextDecoder().decode(inspect_stdout).split('\n')) {
+                for (const iline of inspect_stdout.split('\n')) {
                     if (iline.includes('node.name')) {
                         const parts = iline.split('=');
                         name = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
@@ -403,6 +437,7 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
                 }
             }
         } catch (e) {
+            print(`[WpMonitor] inspect failed for node ${node_id}: ${e.message || e}`);
         }
 
         results.push({
@@ -416,15 +451,22 @@ function _fetch_nodes_from_wpctl(status_text, known_nodes) {
     return results;
 }
 
-function _fetch_devices_from_wpctl(status_text) {
+function _fetch_devices_from_wpctl(status_text, known_devices) {
     if (!status_text) status_text = _fetch_wpctl_status();
     const results = [];
+
+    const known_by_id = {};
+    if (known_devices) {
+        for (const dev of Object.values(known_devices)) {
+            if (dev['global_id']) known_by_id[dev['global_id']] = dev;
+        }
+    }
 
     let in_devices = false;
 
     for (const line of status_text.split('\n')) {
         const stripped = line.trim();
-        const clean = _strip_tree_chars(stripped);
+        const clean = strip_tree_chars(stripped);
         if (clean === 'Devices:' || clean === '├─ Devices:' || clean === '└─ Devices:') {
             in_devices = true;
             continue;
@@ -443,14 +485,17 @@ function _fetch_devices_from_wpctl(status_text) {
         const device_name = m[2].trim();
         const global_id = parseInt(m[1], 10);
 
+        const cached = known_by_id[global_id];
+        if (cached) {
+            results.push(cached);
+            continue;
+        }
+
         let pw_name = device_name;
         try {
-            const [ok, stdout] = GLib.spawn_sync(
-                null, get_wpctl_cmd().concat(['inspect', String(global_id)]),
-                null, GLib.SpawnFlags.SEARCH_PATH, null
-            );
+            const [ok, stdout] = spawn_sync_with_timeout(get_wpctl_cmd().concat(['inspect', String(global_id)]), 2000);
             if (ok) {
-                for (const iline of new TextDecoder().decode(stdout).split('\n')) {
+                for (const iline of stdout.split('\n')) {
                     if (iline.includes('device.name')) {
                         const parts = iline.split('=');
                         pw_name = (parts[1] || '').trim().replace(/^"(.*)"$/, '$1');
@@ -458,7 +503,9 @@ function _fetch_devices_from_wpctl(status_text) {
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            print(`[WpMonitor] inspect failed for device ${global_id}: ${e.message || e}`);
+        }
 
         results.push({
             name: device_name,
@@ -471,18 +518,29 @@ function _fetch_devices_from_wpctl(status_text) {
     return results;
 }
 
-var get_audio_nodes_sync = function() {
-    return _fetch_nodes_from_wpctl();
-};
+// Sync getter removed — UI must stay non-blocking
 
+/**
+ * Asynchronously fetch all audio nodes. Calls callback with the node array
+ * (or empty array on failure/timeout).
+ * @param {function(Array): void} callback
+ */
 function get_audio_nodes_async(callback) {
     if (typeof callback !== 'function') return;
+    let timed_out = false;
+    const timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.STATUS_TIMEOUT_MS + 1000, () => {
+        timed_out = true;
+        callback([]);
+        return GLib.SOURCE_REMOVE;
+    });
     try {
         const proc = Gio.Subprocess.new(
             get_wpctl_cmd().concat(['status']),
             Gio.SubprocessFlags.STDOUT_PIPE
         );
         proc.communicate_utf8_async(null, null, (p, res) => {
+            GLib.source_remove(timer);
+            if (timed_out) return;
             try {
                 const [, stdout] = p.communicate_utf8_finish(res);
                 callback(_fetch_nodes_from_wpctl(stdout));
@@ -491,6 +549,7 @@ function get_audio_nodes_async(callback) {
             }
         });
     } catch (e) {
-        callback([]);
+        GLib.source_remove(timer);
+        if (!timed_out) callback([]);
     }
 }
