@@ -1,4 +1,6 @@
 #!/usr/bin/env gjs
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib } = imports.gi;
 
 let passed = 0;

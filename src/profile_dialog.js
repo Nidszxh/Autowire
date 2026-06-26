@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, GObject, GLib, Gio, Gtk } = imports.gi;
@@ -224,7 +226,7 @@ var ProfileDialog = GObject.registerClass({
 
     _load_devices_async() {
         let completed = false;
-        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.SYNC_FALLBACK_TIMEOUT_MS, () => {
+        const timeout_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, C.DEVICE_LOAD_LOG_INTERVAL_MS, () => {
             if (!completed) {
                 print('[ProfileDialog] Async device loading timed out, continuing wait...');
             }

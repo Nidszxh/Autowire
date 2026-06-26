@@ -32,7 +32,7 @@ tests/
   test.sh                         # Test runner
   test_bt_profiles.js             # Codec ladder pickBest (25)
   test_config_mgr.js              # Config CRUD + migration (25)
-  test_daemon.js                  # Daemon routing + capture (40)
+  test_daemon.js                  # Daemon routing + capture (52)
   test_log.js                     # Log levels + file output (4)
   test_pactl_parser.js            # pactl card parsing (37)
   test_utils.js                   # Subprocess + string helpers (19)
@@ -41,36 +41,12 @@ tests/
 
 All code is pure GJS (no Python).
 
-## Architecture Notes
+## Architecture
 
-**Two independent processes** — the UI and the daemon are completely separate. They only share `~/.config/autowire/profiles.json`.
+Autowire is two independent processes — the UI and the daemon — that communicate only through `~/.config/autowire/profiles.json`.
 
-```
-                       ┌──────────────────────┐
-                       │  profiles.json        │
-                       │  ~/.config/autowire/  │
-                       └──────┬───────┬───────┘
-                              │       │
-                     writes   │       │  watches
-                              │       │
-              ┌───────────────┘       └───────────────┐
-              ▼                                       ▼
-┌─────────────────────────────┐     ┌─────────────────────────────────┐
-│       UI PROCESS            │     │     DAEMON PROCESS              │
-│  main.js  (GTK+Adwaita)     │     │  daemon_main.js (GLib)          │
-│                             │     │                                 │
-│  window.js                  │     │  daemon.js  (routing)           │
-│  profile_dialog.js          │     │  wp_monitor.js  (poll/events)   │
-│  config_mgr.js (write)      │     │  config_mgr.js (read)           │
-│  constants.js               │     │  constants.js                   │
-│  utils.js                   │     │  utils.js                       │
-│  bt_profiles.js             │     │  bt_profiles.js                 │
-│                             │     │  pactl_parser.js                │
-└─────────────────────────────┘     └─────────────────────────────────┘
-```
-
-- **UI** (`src/main.js`) requires GTK and Adwaita. WirePlumber typelib is optional — falls back to poll-only mode when unavailable (e.g. in Flatpak with `org.gnome.Platform//50`).
-- **Daemon** (`src/daemon_main.js`) imports only `GLib`, `Gio`, `GLibUnix`, `config_mgr`, and `daemon`. No GTK. This is intentional — the daemon must run in headless environments. WirePlumber typelib is also optional here.
+- **UI** (`src/main.js`) requires GTK and Adwaita. WirePlumber typelib is optional.
+- **Daemon** (`src/daemon_main.js`) is GLib-only. No GTK, runs headless.
 
 When adding features:
 - Routing logic goes in `daemon.js`
@@ -81,44 +57,13 @@ When adding features:
 - pactl card parsing goes in `pactl_parser.js`
 - Never import GTK from `daemon.js` or `daemon_main.js`
 
-### Profile Activation
-
-Each profile has an `is_active` boolean. Only one profile per trigger device can be active at a time. When `save_profile()` is called with `is_active=True`, it automatically deactivates all sibling profiles for that trigger. `daemon.check_and_route_device()` skips any profile where `is_active` is not True.
-
-### Stream-Aware Auto-Switching
-
-When a profile has `auto_switch: true`, the daemon monitors capture streams via `WpMonitor._poll_streams()`:
-
-```
-  wpctl status → Streams section
-       │
-       ├── input_* appears  →  emit 'capture-started'
-       │                        └─ switch to bt_profile_call (HSP/HFP)
-       │                           route BT mic as default source
-       │
-   └── input_* disappears →  emit 'capture-stopped'
-                                  └─ 3s debounce timer
-                                     └─ if no new capture → restore bt_profile (A2DP)
-                                                            route BT sink as default
-                                                            pactl move-sink-input —
-                                                              migrate ALSA streams
-                                                              to BT sink
-```
-
-On detecting an `input_*` stream targeting the device:
-
-1. **`capture-started`** signal fires — daemon cancels any pending restore timer, routes BT mic as default source, sets `bt_profile_call` (e.g. `handsfree-headset`)
-2. **`capture-stopped`** signal fires — daemon starts a 3s debounce timer; on expiry restores `bt_profile` (e.g. `a2dp-sink-aac`), re-routes BT sink as default, and runs `pactl move-sink-input` to migrate any ALSA-bound streams (music players, browsers) to the restored BT sink. Uses pactl directly (bypassing the 3s-polled monitor cache) to handle pipewire-pulse registration lag after the A2DP profile switch.
-
-If a new capture starts during debounce, the timer is cancelled. This handles push-to-talk gaps.
-
-**BT card bridging:** Capture events fire on `bluez_input.XX.*` but profiles are keyed by `bluez_output.XX.*`. The daemon's `_find_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC`. Capture state is tracked via `_active_capture_nodes` Set in `daemon.js`.
-
-`check_and_route_device()` always uses `bt_profile` for initial routing. Capture-aware switching between `bt_profile` and `bt_profile_call` is handled separately by `handle_capture_started()` / `handle_capture_stopped()`, driven by actual capture stream transitions.
+See [`docs/architecture.md`](docs/architecture.md) for the full technical reference:
+module descriptions, data flows, JSON schema, Flatpak permissions, and known quirks.
+See [`AGENTS.md`](AGENTS.md) for deep implementation patterns and gotchas.
 
 ## Testing
 
-Run all 192 tests:
+Run all 178 tests:
 
 ```bash
 ./tests/test.sh

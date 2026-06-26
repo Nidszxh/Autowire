@@ -1,4 +1,6 @@
 #!/usr/bin/env gjs
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const log = imports.log;
 
 let passed = 0;

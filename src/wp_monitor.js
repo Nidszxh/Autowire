@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib, GObject, Gio } = imports.gi;
 const { get_wpctl_cmd, strip_tree_chars, spawn_sync_with_timeout } = imports.utils;
 const C = imports.constants;

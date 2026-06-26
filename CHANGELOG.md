@@ -4,6 +4,15 @@ All notable changes to Autowire are documented here.
 
 ## [Unreleased]
 
+### Flathub pre-submission polish
+- **Flatpak daemon `--branch=stable` removed** — `window.js` no longer hardcodes `--branch=stable` when spawning the daemon via flatpak-spawn, fixing local builds on non-stable branches.
+- **Daemon wrapper exit code 141/143 handling** — `scripts/autowire-daemon-wrapper.sh` treats exit codes >= 128 (signal-terminated) as intentional shutdown, preventing restart loops.
+- **`SYNC_FALLBACK_TIMEOUT_MS` renamed to `DEVICE_LOAD_LOG_INTERVAL_MS`** — constant name now accurately reflects its actual use as a periodic logging interval during async device loading.
+- **Desktop file** — removed `X-GNOME-UsesNotifications=false`; reordered categories to `Audio;AudioVideo;Settings;`.
+- **About dialog** — changed "Bluetooth devices" to "hardware devices" to reflect the app works with USB docks and HDMI monitors.
+- **Architecture docs** — fixed `a2dp-sink-codec-auto` → `a2dp-sink` in the codec ladder; renamed `SYNC_FALLBACK_TIMEOUT_MS` to `DEVICE_LOAD_LOG_INTERVAL_MS`.
+- **GPL-3.0-or-later SPDX headers** — added to all 12 source modules, 7 test files, wrapper scripts, and postinstall script.
+
 ### Bug fixes, architecture, quality, and new features
 - **DaemonEngine class** — all mutable state (`_last_routed`, `_capture_timers`, `_capture_start_timers`, `_active_capture_nodes`, `_restoring_cards`, `_activated_bt_cards`) encapsulated in instance. Module-level constants remain at module scope.
 - **Bug fix: activate_bt_card() ordering** — moved `_activated_bt_cards.add()` to after profile-exists check. Prevents cards from being permanently skipped when no active profile targets them at connection time.
@@ -22,7 +31,7 @@ All notable changes to Autowire are documented here.
 - **`_reassert_default_sink()` pactl fallback** — when `get_audio_nodes()` returns stale data (no BT sink found), falls back to `_resolve_bt_sink_name()` via pactl. Added `_schedule_sink_reassert()` for retry on successive poll cycles.
 - **`_resolve_node_id()` BT cache bypass** — `bluez_*` nodes skip the poll data cache since PipeWire recreates them with new PW IDs after profile switches (ALSA nodes retain their IDs, so cache is safe for them).
 - **Source default removal** — removed `set_system_default()` call for BT input source in `handle_capture_started()` since `wpctl set-default` rejects `Audio/Source/Internal` nodes.
-- **192 tests** — 192 GJS unit tests across 7 test files.
+- **178 tests** — 178 GJS unit tests across 7 test files.
 - **Flatpak daemon wrapper exit fix** — wrapper now checks gjs exit code: exits cleanly on code 0 (Ctrl+C/SIGTERM), restarts on non-zero (crash). Prevents infinite restart loop on intentional shutdown.
 
 ### v0.3.12 — UI polish, daemon fixes, Flathub prep
@@ -37,10 +46,10 @@ All notable changes to Autowire are documented here.
 - **Profile rows** — clickable to edit via `activated` signal; pencil icon (`document-edit-symbolic`) always visible alongside move/delete buttons.
 - **Ctrl+N fix** — keyboard shortcut now calls `_on_add_clicked()` (was undefined `_show_add_dialog()`).
 - **Screenshots** — 4 PNGs added to `data/screenshots/` (main, profile, add, edit).
-- **metainfo update** — screenshots block added; test count 178→192; `APP_VERSION`→0.3.12.
+- **metainfo update** — screenshots block added; test count 166→178; `APP_VERSION`→0.3.12.
 - **constants.js** — `APP_VERSION` updated to `'0.3.12'`.
 - **main.js** — unused `C = imports.constants` removed; SIGINT/SIGTERM handlers installed via `GLibUnix.signal_add()`.
-- **All 192 tests pass**.
+- **All 178 tests pass**.
 
 ## [0.3.11] - 2026-06-19
 

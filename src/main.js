@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 

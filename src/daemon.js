@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib, Gio } = imports.gi;
 const { is_flatpak, get_wpctl_cmd, get_pactl_cmd, strip_tree_chars } = imports.utils;
 const config_mgr = imports.config_mgr;

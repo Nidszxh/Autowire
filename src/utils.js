@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib } = imports.gi;
 
 var is_flatpak = GLib.file_test('/.flatpak-info', GLib.FileTest.EXISTS);

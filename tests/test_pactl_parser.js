@@ -1,4 +1,6 @@
 #!/usr/bin/env gjs
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const pactl_parser = imports.pactl_parser;
 
 let passed = 0;

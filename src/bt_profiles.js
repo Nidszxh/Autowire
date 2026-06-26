@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * Shared Bluetooth codec priority ladders.
  * Single source of truth for A2DP quality ranking and HSP/HFP ordering.

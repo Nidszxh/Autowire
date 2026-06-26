@@ -27,20 +27,29 @@ Autowire automatically switches your PipeWire/WirePlumber audio routing whenever
 
 ## Screenshots
 
-![Main window](data/screenshots/main.png)
+<table>
+  <tr>
+    <td><img src="data/screenshots/main.png" alt="Main window" width="100%"></td>
+    <td><img src="data/screenshots/add.png" alt="Profile dialog" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center">Main window — profile list grouped by device</td>
+    <td align="center">Profile dialog — create or edit a profile</td>
+  </tr>
+</table>
 
 ---
 
 ## Requirements
 
-| Dependency | Version | Notes |
-|---|---|---|---|
-| GNOME Platform | 50 | |
-| GTK | 4.0 | |
-| Libadwaita | 1.5+ | |
-| WirePlumber | 0.5+ | Optional — typelib missing on Flatpak `//50` runtime, falls back to poll-only |
-| GJS | 1.80+ | |
-| PipeWire | ≥ 1.0 | Tested on 1.6.6 (handles both `<` and `>` stream arrows) |
+| Dependency     | Version | Notes |
+|----------------|---------|-------|
+| GNOME Platform | 50      |       |
+| GTK            | 4.0     |       |
+| Libadwaita     | 1.5+    |       |
+| WirePlumber    | 0.5+    | Optional — missing on Flatpak //50, uses poll-only |
+| GJS            | 1.80+   |       |
+| PipeWire       | ≥ 1.0   | Tested on 1.6.6 |
 
 
 ---
@@ -77,56 +86,44 @@ flatpak run --command=autowire-daemon io.github.nidszxh.Autowire
 
 ## How It Works
 
-### The Double-Headed Architecture
+### Two Processes, One JSON
 
 ```
  UI (GTK) ──write──▶  profiles.json  ◀──watch──  Daemon (GLib)
 ```
 
-### Two Processes, One JSON
-
-1. **UI** writes profiles.json when user creates/edits/deletes a profile (atomic write)
-2. **Daemon** watches profiles.json via `Gio.FileMonitor` + re-routes on changes
-3. **Daemon** also polls `wpctl status` every 3s for new/removed audio nodes
-4. No IPC needed — just a shared JSON file on disk
+1. **UI** writes profiles.json when you create, edit, or delete a profile
+2. **Daemon** watches profiles.json and re-routes audio on changes
+3. **Daemon** also polls PipeWire every 3 seconds for new or removed audio devices
+4. No IPC — just a shared JSON file on disk
 
 ### Profile Matching Flow
 
 1. A device connects (USB dock, Bluetooth headset, HDMI monitor)
-2. WirePlumber creates a `WpNode` for the new audio endpoint
-3. The Daemon's `WpMonitor` polls `wpctl status` every 3s and detects new nodes; for Bluetooth cards, `device-added` triggers `activate_bt_card()` to bring the card out of `off` state into the best available profile (from active profile config, or `a2dp-sink-aac` by default, with a retry fallback to `a2dp-sink` after 5s if the card stays in `off`)
-4. `check_and_route_device()` loads `profiles.json`, finds the `is_active` profile matching that trigger via:
-   - **Exact match**: `trigger_device_name == node_name`
-   - **BT card fallback**: extracts `bluez_card.MAC` from the node and matches any active profile whose trigger shares the same MAC
-5. If a profile is active, it fires:
-   - `wpctl set-default <sink>` — routes audio to the chosen output (auto-discovers BT sink if empty)
-   - `wpctl set-default <source>` — routes microphone to the chosen input (auto-discovers BT source if empty)
-    - `wpctl set-profile <global_id> <bt_codec>` — forces high-quality BT codec via resolved PW global ID (initial routing always uses `bt_profile`; capture-aware switching is handled separately by `handle_capture_started`/`handle_capture_stopped`)
+2. The daemon detects the new device and loads profiles.json
+3. It finds the active profile whose trigger matches the device name
+4. If found, it applies the profile's actions:
+   - Sets the default audio output (speakers, headset, etc.)
+   - Sets the default audio input (microphone)
+   - Forces the Bluetooth codec (AAC, LDAC, aptX, etc.)
 
-### Stream-Aware Auto-Switching (for Bluetooth headsets)
+### Auto-Switch for Calls (Bluetooth headsets)
 
-When a profile has **Auto-switch for calls** enabled:
+When a profile has **Auto-switch for calls** enabled and an app starts using the microphone:
 
 ```
- Capture starts → wpctl detects input_* stream
-   → switch to bt_profile_call (HSP/HFP)
-   → route BT mic as default source
+Capture starts → switch to HSP/HFP (headset profile)
+              → route BT mic as default input
 
-Capture stops → 3s debounce
-   → restore bt_profile (A2DP)
-   → route BT sink as default
-   → pactl migrate streams from ALSA
+Capture stops → 3-second debounce (tolerates push-to-talk)
+              → restore A2DP (high-quality audio)
+              → route BT speakers as default output
 ```
 
-1. An app captures the mic (Discord, Zoom, `arecord`, etc.)
-2. `WpMonitor` detects the `input_*` stream from `wpctl status` → emits `capture-started`
-3. Daemon cancels any pending restore, switches to `bt_profile_call` (e.g. `handsfree-headset` — falls back to `headset-head-unit` if the card doesn't expose the former)
-4. Mic works — HSP/HFP profile is active
-5. App stops capturing → daemon starts 3s debounce (tolerates push-to-talk gaps)
-6. No new capture within 3s → daemon restores `bt_profile` (e.g. AAC, LDAC)
-7. High-quality audio returns
-
-**Important:** Capture events fire on the `bluez_input.XX.*` node name, but profiles are keyed by `bluez_output.XX.*`. The daemon's `_find_active_profile_for()` tries exact match first, then falls back to matching any active profile on the same `bluez_card.MAC` — ensuring the correct profile is found regardless of whether the input or output node triggers routing. A `_restoring_cards` Set prevents the routing engine from barging in on codec changes that the capture handler is already managing. After A2DP restore, `_migrate_streams_to_bt()` runs `pactl move-sink-input` to move ALSA-bound streams (music players, browsers) back to the restored BT sink — using pactl directly (bypassing the stale monitor cache) to handle pipewire-pulse registration lag.
+1. An app captures the mic (Discord, Zoom, voice chat)
+2. The daemon switches the headset to HSP/HFP mode — mic works
+3. The app stops capturing — the daemon waits 3 seconds
+4. If no new capture within 3 seconds, it restores A2DP mode — high-quality audio returns
 
 ### Active Profile Rule
 
@@ -148,6 +145,7 @@ autowire/
 │   │                           #   │
 │   ├── config_mgr.js           # ──┤  Shared: atomic JSON CRUD
 │   ├── constants.js            #   │  Timing/interval constants
+│   ├── log.js                  #   │  Structured logging
 │   ├── utils.js                #   │  Flatpak detection, absolute path helpers
 │   │                           #   │
 │   ├── daemon.js               #   │  Routing engine + BT switching
@@ -164,7 +162,7 @@ autowire/
 │   ├── test.sh                 # Shell runner
 │   ├── test_bt_profiles.js     # Codec ladder pickBest logic (25)
 │   ├── test_config_mgr.js      # Config CRUD + migration (25)
-│   ├── test_daemon.js          # Daemon routing + capture logic (40)
+│   ├── test_daemon.js          # Daemon routing + capture logic (52)
 │   ├── test_log.js             # Log levels + file output (4)
 │   ├── test_pactl_parser.js    # pactl card parsing (37)
 │   ├── test_utils.js           # Subprocess + string helpers (19)
@@ -195,4 +193,4 @@ autowire/
 
 ## License
 
-GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
+GNU General Public License v3.0 or later — see [LICENSE](LICENSE) for details.

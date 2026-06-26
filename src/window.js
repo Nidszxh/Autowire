@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 imports.gi.versions.Gtk = '4.0';
 imports.gi.versions.Adw = '1';
 const { Adw, Gio, GLib, GObject, Gtk } = imports.gi;
@@ -450,7 +452,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
         about.set_application_icon('io.github.nidszxh.Autowire');
         about.set_developer_name('nidszxh');
         about.set_version(APP_VERSION);
-        about.set_comments('Audio routing manager for GNOME.\nAutomatically switches audio profiles when Bluetooth devices connect.');
+        about.set_comments('Automated audio profile manager for GNOME.\nAutomatically switches audio profiles when hardware devices connect.');
         about.set_website('https://github.com/nidszxh/autowire');
         about.set_support_url('https://github.com/nidszxh/autowire/issues');
         about.set_license_type(Gtk.License.GPL_3_0);
@@ -540,7 +542,7 @@ var AutowireWindow = GObject.registerClass(class AutowireWindow extends Adw.Appl
 
         let argv;
         if (is_flatpak) {
-            argv = ['flatpak-spawn', '--host', 'flatpak', 'run', '--command=autowire-daemon', '--branch=stable', 'io.github.nidszxh.Autowire'];
+            argv = ['flatpak-spawn', '--host', 'flatpak', 'run', '--command=autowire-daemon', 'io.github.nidszxh.Autowire'];
         } else {
             const exe = 'gjs';
             const exe_path = GLib.find_program_in_path(exe);

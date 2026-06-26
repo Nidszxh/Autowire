@@ -27,8 +27,14 @@
       <li>Automatically switch default output (speakers, headphones) and input (microphone)</li>
       <li>Event-driven daemon — near-zero resource usage at idle</li>
       <li>Clean Libadwaita interface that matches GNOME Settings</li>
-      <li>Profiles stored locally in a simple JSON file</li>
+      <li>Runs as a systemd user service — works even when the UI is closed</li>
+      <li>Force high-quality Bluetooth codecs (AAC, LDAC, aptX) instead of mSBC</li>
+      <li>Multiple profiles per device — switch between Music and Call modes</li>
       <li>Auto-switch for calls — daemon detects active mic streams and switches between HSP/HFP and A2DP automatically</li>
+      <li>Import and Export profiles via JSON files</li>
+      <li>Desktop notifications on routing events</li>
+      <li>Profiles stored locally in a simple JSON file</li>
+      <li>Keyboard shortcuts: Ctrl+N, Ctrl+Q, F5</li>
     </ul>
   </description>
 

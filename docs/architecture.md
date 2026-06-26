@@ -47,7 +47,7 @@ Central location for all timing and interval constants. Consumed by `daemon.js`,
 - `CAPTURE_DEBOUNCE_MS` (3000) — debounce before restoring bt_profile after capture-stopped
 - `HEARTBEAT_INTERVAL_S` (30) — daemon heartbeat tick interval (seconds)
 - `HEARTBEAT_ALIVE_THRESHOLD_S` (45) — heartbeat freshness threshold in window.js
-- `SYNC_FALLBACK_TIMEOUT_MS` (3000) — periodic logging interval for async device loading in profile dialog
+- `DEVICE_LOAD_LOG_INTERVAL_MS` (3000) — periodic log interval for async device loading in profile dialog
 - `BT_RETRY_DELAY_MS` (5000) — delay before falling back to `a2dp-sink` if card stays in `off`
 - `CAPTURE_START_DEBOUNCE_MS` (1500) — debounce per-card before acting on capture-started
 - `CONFIG_CHANGE_DEBOUNCE_MS` (500) — rate limit for config file monitor events
@@ -78,7 +78,7 @@ Shared helpers for subprocess management and string manipulation.
 ### `bt_profiles.js`
 Codec-quality ladder shared between profile dialog and daemon.
 
-- `A2DP_QUALITY` — ordered quality-codec fallback ladder (LDAC > aptX-HD > aptX > AAC > a2dp-sink-codec-auto > SBC-XQ > SBC)
+- `A2DP_QUALITY` — ordered quality-codec fallback ladder (LDAC > aptX-HD > aptX > AAC > a2dp-sink > SBC-XQ > SBC)
 - `HSP_HFP` — ordered call-profile fallback ladder (handsfree-headset > headset-head-unit)
 - `pickBest(available, desired='')` — matches user's desired profile against what the card actually exposes; iterates the appropriate ladder (`HSP_HFP` if desired is a call profile, `A2DP_QUALITY` otherwise) and returns the first entry the card supports, or `''` if nothing matches. Accepts both `Set` and `Array` for `available`.
 
@@ -296,27 +296,11 @@ A `_restoring_cards` Set prevents the routing engine from barging in when the ca
 
 ---
 
-## Key Quirks
+## Quirks
 
-- **`Adw.PreferencesGroup` title via constructor is broken in GTK4** — always use `set_title()` after construction.
-- **`Adw.AlertDialog` constructor requires plain object** — `new Adw.AlertDialog({heading, body})`, not positional arguments.
-- **GJS Wp bindings cannot read proxy properties** — `Proxy.get_properties()` returns null, `props.properties` is undefined. All node/device data is obtained via `wpctl status` + `wpctl inspect` subprocess polling instead.
-- **Polling interval** is 3s by default (`POLL_INTERVAL_MS`). The poll runs `_poll_nodes()`, `_poll_devices()`, and `_poll_streams()` every cycle.
-- **Capture stream detection** uses a regex on `wpctl status` Streams sub-entries: `input_<port>.*(?:<|>) <description>:<port> [active|init]`. Handles both `<` (PipeWire ≥1.6.6, left arrow indicates input) and `>` (older versions, right arrow indicates output). Target descriptions are mapped to numeric node IDs via `_desc_to_id`, with node metadata in `_id_to_node`.
-- **Debounce on capture-stopped** is 3s (`CAPTURE_DEBOUNCE_MS`) to tolerate push-to-talk mic gaps. A new `capture-started` during debounce cancels the timer.
-- **`wpctl set-default` requires numeric ID** on PipeWire 1.6.5 — `_resolve_node_id()` parses `wpctl status` for candidate IDs, then `wpctl inspect`s each to match `node.name`.
-- **`wpctl set-profile` requires PW global ID** (numeric), not a node or device name. Use `monitor.resolveDeviceGlobalId('bluez_card.XX_XX_...')` which wraps `get_device_global_id()` with an on-the-fly `wpctl status` Devices section fallback.
-- **Cooldown** is per-node-name, not global. Rapid plug/unplug cycles on *different* devices all fire immediately.
-- **Config file watcher** uses `Gio.File.new_for_path(path).monitor()` (GJS 1.80+ API, not `Gio.FileMonitor.new_for_path`).
-- **Signal handling** uses `GLibUnix.signal_add()` with numeric signals (GJS 1.80+ API, not `GLib.unix_signal_add`).
+See [`AGENTS.md`](../AGENTS.md) for the full list of critical patterns, gotchas, and UI/GJS workarounds.
+
+Quirks documented here are those not covered in AGENTS.md:
+
 - **capture-started/stopped signals** only fire on 0→1 / 1→0 transitions (never repeated for same state). Daemon can safely react to each event once.
-- **WirePlumber restart recovery** — capture-started/stopped signals are wired OUTSIDE the `ready` handler to prevent duplicate handler chains. On Wp.Core reconnect, `ready` fires again and `daemon_main.js` calls `engine.clear_state()` to purge stale routing/capture state, then re-applies routing against the new audio graph.
-- **Device/Node ID caching** — `_poll_devices()` and `_fetch_nodes_from_wpctl()` cache known devices/nodes by global_id, skipping expensive `wpctl inspect` calls for already-known hardware. New devices still get inspected once on first appearance. This avoids O(N) blocking subprocess calls every poll cycle.
 - **BT card removal guard** — when a BT device disconnects during an active capture, `_activated_bt_cards` is cleared immediately. The 3s capture-stopped debounce timer checks `_activated_bt_cards.has(card_name)` before attempting to restore, preventing `wpctl set-profile` calls on nonexistent devices.
-- **BT card-aware profile matching** — capture events fire on `bluez_input.XX.MAC` but profiles are keyed by `bluez_output.XX.MAC`. The daemon's `_find_active_profile_for()` tries the exact trigger match first; if that fails, it extracts the `bluez_card.MAC` from both the connecting node and all profile triggers, and returns the first matching active profile on the same BT card. This ensures that mic activation via `bluez_input.XX.handsfree-headset` correctly finds a profile configured for `bluez_output.XX.a2dp-sink`.
-- **`_active_capture_nodes` Set** tracks which nodes have active captures, indexed by node name. `handle_capture_started` adds to it; `handle_capture_stopped` removes after debounce. Bridges the gap between output-keyed routing and input-keyed capture tracking.
-- **`_capture_timers` plain object** — per-node-name debounce timers (keyed by node_name string). Replaced a single shared timer so independent BT cards each get their own 3s debounce window. (Note: `_capture_start_timers` is a separate `Map` keyed by `card_name` for the 1.5s capture-start debounce.)
-- **`_restoring_cards` Set** — when the capture handler initiates a codec change via `set_bt_profile()`, it adds the card name to this Set (try/finally ensures cleanup). The `handle_capture_stopped` handler checks this Set before restoring (prevents multiple timers from racing to restore the same card). `_bt_card_name()` itself is a pure regex extractor with no awareness of this Set.
-- **Auto-route BT input/output** — when a profile has `bt_profile` set but empty `default_sink`/`default_source`, the daemon auto-discovers the corresponding BT sink and source node names by scanning all nodes, finding ones that share the same `bluez_card.MAC`, and routing both. This removes the need for users to manually select sink/source for BT profiles.
-- **`node-removed` cleanup** — `_capture_timers` and `_active_capture_nodes` entries cleaned up on node removal. `_capture_counts` is NOT deleted here — it persists until `_poll_streams()` replaces the entire counts map at the end of the poll cycle, allowing >0→0 transition detection.
-- **`off` state filtering** — `_fetch_nodes_from_wpctl()` applies a `/\boff\b/` regex to the raw `wpctl status` line, skipping nodes shown as `(off)` to prevent false routing attempts for inactive Bluetooth cards.

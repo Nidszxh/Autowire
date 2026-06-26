@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Post-install script: updates icon cache, desktop database, and enables user services."""
 
 import os

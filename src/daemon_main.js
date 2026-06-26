@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib, Gio } = imports.gi;
 const GLibUnix = imports.gi.GLibUnix;
 const config_mgr = imports.config_mgr;

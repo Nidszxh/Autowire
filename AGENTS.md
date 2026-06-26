@@ -52,7 +52,7 @@ tests/
   test.sh               # Shell runner — accepts GJS env var, individual file args
   test_bt_profiles.js   # 25 tests — pickBest ladder logic with Set/Array, HSP vs A2DP, fallback
   test_config_mgr.js    # 25 tests — CRUD, migration, set-active, reorder
-  test_daemon.js        # 40 tests — BT card parsing, capture matching, profile lookup, validate
+  test_daemon.js        # 52 tests — BT card parsing, capture matching, profile lookup, validate
   test_log.js           # 4 tests — log levels, file output, no-crash assertions
   test_pactl_parser.js  # 37 tests — card parsing, empty/malformed input, complex profile names
   test_utils.js         # 19 tests — spawn_sync_with_timeout, strip_tree_chars, cmd builders
@@ -63,7 +63,7 @@ tests/
 ## Shared Modules (loaded by both processes)
 
 - **config_mgr.js** — `CONFIG_DIR`, `CONFIG_FILE` computed from `XDG_CONFIG_HOME`. `initialize_config()` creates dir + empty file if absent. Auto-migrates v0→v1 (adds `is_active: false`) on load. On JSON parse failure, backs up corrupted file to `profiles.json.corrupted.<timestamp>` and creates fresh empty config. `save_profile()` accepts `originalName`/`originalTrigger` kwargs for rename detection (prevents duplicates). Writes via `GLib.file_set_contents` — crash-safe. `load_profiles_readonly()` parses without ever writing (no migration persist). `import_profiles()`/`export_profiles()` for JSON file transfer.
-- **constants.js** — all magic numbers centralized: `POLL_INTERVAL_MS=3000`, `ROUTING_COOLDOWN_S=5`, `CAPTURE_DEBOUNCE_MS=3000`, `CAPTURE_START_DEBOUNCE_MS=1500`, `HEARTBEAT_INTERVAL_S=30`, `HEARTBEAT_ALIVE_THRESHOLD_S=45`, `BT_RETRY_DELAY_MS=5000`, `CONFIG_CHANGE_DEBOUNCE_MS=500`, `SYNC_FALLBACK_TIMEOUT_MS=3000`, `FLASH_DURATION_MS=1500`.
+- **constants.js** — all magic numbers centralized: `POLL_INTERVAL_MS=3000`, `ROUTING_COOLDOWN_S=5`, `CAPTURE_DEBOUNCE_MS=3000`, `CAPTURE_START_DEBOUNCE_MS=1500`, `HEARTBEAT_INTERVAL_S=30`, `HEARTBEAT_ALIVE_THRESHOLD_S=45`, `BT_RETRY_DELAY_MS=5000`, `CONFIG_CHANGE_DEBOUNCE_MS=500`, `DEVICE_LOAD_LOG_INTERVAL_MS=3000`, `FLASH_DURATION_MS=1500`, `DAEMON_START_GRACE_MS=2500`, `STATUS_TIMEOUT_MS=4000`, `DAEMON_POLL_INTERVAL_S=15`, `RECONNECT_DELAY_S=5`, `FALLBACK_BT_PROFILE=a2dp-sink`, `APP_VERSION=0.3.12`.
 - **log.js** — structured logging with levels (`DEBUG`/`INFO`/`WARN`/`ERROR`) and `[HH:MM:SS]` timestamps. `setLogFile(path)` enables dual stdout+file output with 1MB rotation. Used via `log.info('module', 'msg')`, `log.warn(...)`, `log.error(...)`.
 - **utils.js** — `is_flatpak` checks `/.flatpak-info` file existence. In Flatpak mode, `get_wpctl_cmd()`/`get_pactl_cmd()` prepend `['flatpak-spawn', '--host']`. Outside Flatpak, resolves absolute binary paths at module load time to prevent PATH injection. `strip_tree_chars(line)` removes PipeWire tree-drawing characters from status output lines. `spawn_sync_with_timeout(argv, timeout_ms)` runs a subprocess via `Gio.Subprocess` with `communicate_utf8_async` + nested `GLib.MainLoop` — timeouts kill runaway processes instead of freezing the daemon.
 - **bt_profiles.js** — exports `A2DP_QUALITY` (ordered: LDAC > aptX-HD > aptX > AAC > a2dp-sink > SBC-XQ > SBC) and `HSP_HFP` (handsfree-headset > headset-head-unit). `pickBest(available, desired)` matches user preference against card capability via ladder fallback.

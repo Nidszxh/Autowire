@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const { GLib } = imports.gi;
 const log = imports.log;
 const { get_pactl_cmd, spawn_sync_with_timeout } = imports.utils;
